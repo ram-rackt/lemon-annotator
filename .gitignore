@@ -1,0 +1,43 @@
+# Local data: credentials, annotations and exports live here. Never commit it.
+app_data/
+
+# Secrets: env files (examples are committed), keys, AWS access-key downloads
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*accessKeys*.csv
+*credentials*.csv
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js (frontend/.gitignore covers the frontend in detail)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editors / local tool settings
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+.claude/settings.local.json

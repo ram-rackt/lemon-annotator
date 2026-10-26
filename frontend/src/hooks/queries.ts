@@ -2,8 +2,11 @@
 
 import { keepPreviousData, type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { useSignedIn } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
 import type { ActivityResult, AnnotationSave, Project, ProjectUpdate, VideoAnnotation, VideoList } from "@/lib/types";
+
+// Every query waits for useSignedIn(): with sign-in on, nothing is requested until a session is confirmed.
 
 export const keys = {
   projects: ["projects"] as const,
@@ -16,11 +19,11 @@ export const keys = {
 };
 
 export function useProjects() {
-  return useQuery({ queryKey: keys.projects, queryFn: api.listProjects });
+  return useQuery({ queryKey: keys.projects, queryFn: api.listProjects, enabled: useSignedIn() });
 }
 
 export function useProject(id: string) {
-  return useQuery({ queryKey: keys.project(id), queryFn: () => api.getProject(id) });
+  return useQuery({ queryKey: keys.project(id), queryFn: () => api.getProject(id), enabled: useSignedIn() });
 }
 
 export function useUpdateProject(id: string) {
@@ -49,6 +52,7 @@ function applySync(qc: QueryClient, id: string, list: VideoList) {
 
 export function useVideos(id: string, enabled: boolean) {
   const qc = useQueryClient();
+  const signedIn = useSignedIn();
   return useQuery({
     queryKey: keys.videos(id),
     queryFn: async () => {
@@ -56,7 +60,7 @@ export function useVideos(id: string, enabled: boolean) {
       applySync(qc, id, list);
       return list;
     },
-    enabled,
+    enabled: enabled && signedIn,
     staleTime: 5 * 60_000,
   });
 }
@@ -87,14 +91,16 @@ export function streamUrlQuery(id: string, key: string) {
 }
 
 export function useStreamUrl(id: string, key: string | null) {
-  return useQuery({ ...streamUrlQuery(id, key ?? ""), enabled: Boolean(key) });
+  const signedIn = useSignedIn();
+  return useQuery({ ...streamUrlQuery(id, key ?? ""), enabled: Boolean(key) && signedIn });
 }
 
 export function useAnnotation(id: string, key: string | null) {
+  const signedIn = useSignedIn();
   return useQuery({
     queryKey: keys.annotation(id, key ?? ""),
     queryFn: () => api.getAnnotation(id, key!),
-    enabled: Boolean(key),
+    enabled: Boolean(key) && signedIn,
     staleTime: Infinity,
   });
 }
@@ -157,6 +163,7 @@ export function useActivity(id: string, videoKey: string | null) {
       mergeActivity(qc, id, activity);
       return activity;
     },
+    enabled: useSignedIn(),
     refetchInterval: ACTIVITY_INTERVAL_MS,
     refetchOnWindowFocus: true,
     staleTime: 0,

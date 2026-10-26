@@ -2,30 +2,19 @@
 
 import type { Session } from "@supabase/supabase-js";
 import { useQueryClient } from "@tanstack/react-query";
-import { createContext, useContext, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { LoginScreen } from "@/components/auth/login-screen";
-import { Spinner } from "@/components/ui/spinner";
+import { AuthContext, type AuthState } from "@/hooks/use-auth";
 import { authEnabled, displayName, supabase } from "@/lib/supabase";
 
-export interface SignedInUser {
-  id: string;
-  email: string | null;
-  name: string;
-}
-
-interface AuthState {
-  user: SignedInUser | null;
-  /** Opened from a password-reset email: the user should choose a new password. */
-  recovering: boolean;
-  setRecovering: (value: boolean) => void;
-}
-
-const AuthContext = createContext<AuthState>({ user: null, recovering: false, setRecovering: () => {} });
-
-export const useAuth = () => useContext(AuthContext);
-
-/** Hosted setup: shows the sign-in screen until there is a session. Locally (no Supabase) it renders the app. */
+/**
+ * Hosted setup: the sign-in screen when there is no session. Locally (no Supabase) it renders the app.
+ *
+ * While the saved session is still being read (and when the page is prerendered) the page itself is
+ * rendered, showing its loading skeletons: queries wait for `ready`, so nothing is requested yet. This
+ * keeps every route renderable for Next.js and avoids flashing the sign-in screen on reload.
+ */
 export function AuthGate({ children }: { children: React.ReactNode }) {
   if (!authEnabled) return children;
   return <SignedIn>{children}</SignedIn>;
@@ -50,19 +39,12 @@ function SignedIn({ children }: { children: React.ReactNode }) {
     return () => data.subscription.unsubscribe();
   }, [qc]);
 
-  if (session === undefined) {
-    return (
-      <div className="grid min-h-svh place-items-center text-muted-foreground">
-        <Spinner className="size-6" />
-      </div>
-    );
-  }
-  if (!session) return <LoginScreen />;
-
-  const user: SignedInUser = {
-    id: session.user.id,
-    email: session.user.email ?? null,
-    name: displayName(session.user),
+  const value: AuthState = {
+    user: session ? { id: session.user.id, email: session.user.email ?? null, name: displayName(session.user) } : null,
+    ready: Boolean(session),
+    recovering,
+    setRecovering,
   };
-  return <AuthContext.Provider value={{ user, recovering, setRecovering }}>{children}</AuthContext.Provider>;
+  // Same element tree in every state, so the page isn't remounted once the session is confirmed.
+  return <AuthContext.Provider value={value}>{session === null ? <LoginScreen /> : children}</AuthContext.Provider>;
 }

@@ -4,7 +4,6 @@ import { KeyRound, LogOut } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
-import { useAuth } from "@/components/auth/auth-gate";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,8 +24,23 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { useAuth } from "@/hooks/use-auth";
 import { initials } from "@/lib/format";
 import { supabase } from "@/lib/supabase";
+import { cn } from "@/lib/utils";
+
+function Avatar({ name, className }: { name: string; className?: string }) {
+  return (
+    <span
+      className={cn(
+        "grid shrink-0 place-items-center rounded-full bg-gradient-to-br from-sky-400 to-blue-600 font-semibold text-white",
+        className,
+      )}
+    >
+      {initials(name)}
+    </span>
+  );
+}
 
 /** Account menu in the header (hosted setup only). */
 export function UserMenu() {
@@ -38,22 +52,34 @@ export function UserMenu() {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="size-10 rounded-lg p-0" aria-label="Account">
-            <span className="grid size-8 place-items-center rounded-full bg-sky-500 text-xs font-semibold text-white">
-              {initials(user.name)}
-            </span>
+          <Button
+            variant="ghost"
+            className="size-10 rounded-full p-0 hover:bg-transparent focus-visible:ring-3 dark:hover:bg-transparent"
+            aria-label={`Account: ${user.name}`}
+          >
+            <Avatar
+              name={user.name}
+              className="size-9 text-sm ring-2 ring-background transition-shadow hover:ring-sky-400/40"
+            />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel className="grid font-normal">
-            <span className="truncate font-medium">{user.name}</span>
-            {user.email && <span className="truncate text-xs text-muted-foreground">{user.email}</span>}
+        <DropdownMenuContent align="end" sideOffset={8} className="w-64 p-1.5">
+          <DropdownMenuLabel className="flex items-center gap-3 px-2 py-2 font-normal">
+            <Avatar name={user.name} className="size-10 text-sm" />
+            <span className="grid min-w-0">
+              <span className="truncate text-sm font-medium text-foreground">{user.name}</span>
+              {user.email && <span className="truncate text-xs text-muted-foreground">{user.email}</span>}
+            </span>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setChanging(true)}>
+          <DropdownMenuItem className="px-2 py-2" onSelect={() => setChanging(true)}>
             <KeyRound /> Change password
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void supabase()?.auth.signOut()}>
+          <DropdownMenuItem
+            variant="destructive"
+            className="px-2 py-2"
+            onSelect={() => void supabase()?.auth.signOut()}
+          >
             <LogOut /> Sign out
           </DropdownMenuItem>
         </DropdownMenuContent>

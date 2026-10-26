@@ -42,7 +42,7 @@ export function DeleteProject({ project }: { project: Project }) {
       setOpen(false);
       qc.removeQueries({ queryKey: keys.project(project.id) });
       qc.invalidateQueries({ queryKey: keys.projects });
-      toast.success(`Deleted “${project.name}”`, { description: `Files moved to ${res.moved_to}` });
+      toast.success(`Deleted “${project.name}”`, { description: `Kept at ${res.moved_to}` });
       router.push("/");
     },
     onError: (err) => {
@@ -62,8 +62,8 @@ export function DeleteProject({ project }: { project: Project }) {
       <CardHeader>
         <CardTitle>Delete project</CardTitle>
         <CardDescription>
-          Moves this project&apos;s folder (config, annotations and exports) to{" "}
-          <code className="font-mono">app_data/.trash</code>. Videos in S3 are never touched.
+          Removes the project for everyone. Nothing is erased: its settings, annotations and exports are kept in
+          Lemon&apos;s trash and can be restored. Videos in S3 are never touched.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -85,10 +85,9 @@ export function DeleteProject({ project }: { project: Project }) {
                 <AlertDialogTitle>Delete “{project.name}”?</AlertDialogTitle>
                 <AlertDialogDescription>
                   {annotated > 0
-                    ? `${annotated} annotated video${annotated === 1 ? "" : "s"} and all exports will be moved to the trash folder.`
-                    : "The project configuration will be moved to the trash folder."}{" "}
-                  You can restore it by moving the folder back into <code className="font-mono">app_data/projects</code>
-                  .
+                    ? `${annotated} annotated video${annotated === 1 ? "" : "s"} and all exports go to the trash with it.`
+                    : "The project settings go to the trash."}{" "}
+                  They are kept there and can be restored.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <div className="grid gap-2">

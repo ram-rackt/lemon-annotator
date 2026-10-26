@@ -49,8 +49,15 @@ class ConflictError(AppError):
     code = "CONFLICT"
 
 
+class AuthError(AppError):
+    """Missing, expired or invalid sign-in."""
+
+    status_code = 401
+    code = "AUTH_REQUIRED"
+
+
 class StorageError(AppError):
-    """Problems reading or writing the local ./app_data directory."""
+    """Problems reading or writing stored data (the ./app_data directory or the database)."""
 
     status_code = 500
     code = "LOCAL_STORAGE_ERROR"

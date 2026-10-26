@@ -41,3 +41,7 @@ desktop.ini
 .idea/
 *.swp
 .claude/settings.local.json
+
+# Local SQLite databases (tests, experiments)
+*.db
+*.sqlite3

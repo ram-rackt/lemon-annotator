@@ -4,11 +4,12 @@ import posixpath
 from fastapi import APIRouter, Depends, Query
 
 from .. import __version__, s3_service
+from ..auth import User, current_user
 from ..config import get_settings
-from ..deps import get_store
+from ..deps import Store, get_store
 from ..errors import S3Error
 from ..models import ExportResult, VideoAnnotation, utcnow
-from ..storage import ProjectStore
+from ..storage import json_default
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["export"])
 
@@ -25,6 +26,7 @@ def _video_entry(ann: VideoAnnotation) -> dict:
         "fps": ann.fps,
         "event_count": len(ann.events),
         "annotated_at": ann.updated_at,
+        "annotated_by": ann.updated_by,
         "labels": ann.labels,
         "events": [
             {
@@ -46,7 +48,8 @@ def _video_entry(ann: VideoAnnotation) -> dict:
 def export_project(
     project_id: str,
     include_unannotated: bool = Query(True),
-    store: ProjectStore = Depends(get_store),
+    user: User = Depends(current_user),
+    store: Store = Depends(get_store),
 ):
     project = store.get(project_id)
     stored, warnings = store.iter_annotations(project_id)
@@ -90,6 +93,7 @@ def export_project(
                 "fps": project.settings.fps,
                 "event_count": 0,
                 "annotated_at": None,
+                "annotated_by": None,
                 "labels": {},
                 "events": [],
             }
@@ -125,13 +129,14 @@ def export_project(
         "videos": videos,
     }
 
-    path = store.write_export(project, data)
-    # Round-trip through the file so the browser download matches what was written to disk.
+    # Plain JSON values (dates as ISO strings), so the stored copy and the download are identical.
+    payload = json.loads(json.dumps(data, default=json_default))
+    filename, location = store.write_export(project, payload, by=user.name)
     return ExportResult(
-        filename=path.name,
-        path=str(path),
+        filename=filename,
+        path=location,
         video_count=len(videos),
         event_count=event_count,
         warnings=warnings,
-        data=json.loads(path.read_text(encoding="utf-8")),
+        data=payload,
     )

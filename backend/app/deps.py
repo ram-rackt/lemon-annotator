@@ -1,16 +1,23 @@
 from functools import lru_cache
 
 from .config import get_settings
+from .db_store import DatabaseStore
 from .models import Project, ProjectPublic, StoragePublic
 from .storage import ProjectStore
 
+# Both stores expose the same methods; which one is used depends on LEMON_DATABASE_URL.
+Store = ProjectStore | DatabaseStore
+
 
 @lru_cache
-def get_store() -> ProjectStore:
-    return ProjectStore(get_settings().data_dir)
+def get_store() -> Store:
+    settings = get_settings()
+    if settings.database_url:
+        return DatabaseStore(settings.database_url)
+    return ProjectStore(settings.data_dir)
 
 
-def to_public(project: Project, store: ProjectStore) -> ProjectPublic:
+def to_public(project: Project, store: Store) -> ProjectPublic:
     return ProjectPublic(
         id=project.id,
         name=project.name,

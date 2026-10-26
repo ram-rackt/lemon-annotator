@@ -1,15 +1,19 @@
 import logging
 import math
 import posixpath
+import secrets
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query
 
-from .. import s3_service
+from .. import presence, s3_service
+from ..auth import User, current_user
 from ..config import get_settings
-from ..deps import get_store
-from ..errors import AppError, S3Error, StorageError, ValidationError
+from ..deps import Store, get_store
+from ..errors import AppError, ConflictError, S3Error, StorageError, ValidationError
 from ..models import (
+    ActivityPing,
+    ActivityResult,
     AnnotationSave,
     ClearResult,
     Project,
@@ -20,9 +24,9 @@ from ..models import (
     VideoDetails,
     VideoItem,
     VideoList,
+    VideoState,
     utcnow,
 )
-from ..storage import ProjectStore
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["videos"])
 log = logging.getLogger(__name__)
@@ -43,18 +47,18 @@ def belongs_to(entry_bucket: str | None, project: Project) -> bool:
 
 
 @router.get("/videos", response_model=VideoList)
-def list_videos(project_id: str, store: ProjectStore = Depends(get_store)):
+def list_videos(project_id: str, store: Store = Depends(get_store)):
     """The video queue. Every listing is a sync: it reads the bucket and records the result."""
     return sync_videos(project_id, store)
 
 
 @router.post("/sync", response_model=VideoList)
-def sync_storage(project_id: str, store: ProjectStore = Depends(get_store)):
+def sync_storage(project_id: str, store: Store = Depends(get_store)):
     """Re-read the bucket now (the "Sync storage" button)."""
     return sync_videos(project_id, store)
 
 
-def sync_videos(project_id: str, store: ProjectStore) -> VideoList:
+def sync_videos(project_id: str, store: Store) -> VideoList:
     project = store.get(project_id)
     objects, truncated = s3_service.list_videos(project.storage, get_settings().max_list_keys)
     index = {k: e for k, e in store.load_index(project_id).items() if belongs_to(e.bucket, project)}
@@ -73,6 +77,7 @@ def sync_videos(project_id: str, store: ProjectStore) -> VideoList:
                 status=entry.status if entry else "not_started",
                 event_count=entry.event_count if entry else 0,
                 annotated_at=entry.updated_at if entry else None,
+                updated_by=entry.updated_by if entry else None,
             )
         )
     # Never silently hide work: surface annotations whose video isn't in the listing. When the
@@ -87,6 +92,7 @@ def sync_videos(project_id: str, store: ProjectStore) -> VideoList:
                 status=entry.status,
                 event_count=entry.event_count,
                 annotated_at=entry.updated_at,
+                updated_by=entry.updated_by,
                 missing=not truncated,
             )
         )
@@ -123,7 +129,7 @@ def stream_url(
     project_id: str,
     key: str = Query(..., min_length=1),
     verify: bool = Query(True, description="HEAD the object first for a precise error"),
-    store: ProjectStore = Depends(get_store),
+    store: Store = Depends(get_store),
 ):
     project = store.get(project_id)
     require_video_key(project, key)
@@ -134,7 +140,7 @@ def stream_url(
 
 
 @router.get("/videos/details", response_model=VideoDetails)
-def video_details(project_id: str, key: str = Query(..., min_length=1), store: ProjectStore = Depends(get_store)):
+def video_details(project_id: str, key: str = Query(..., min_length=1), store: Store = Depends(get_store)):
     """Everything known about one video: S3 object metadata plus local annotation state.
     S3 failures are reported inline so local details still show for videos gone from the bucket."""
     project = store.get(project_id)
@@ -169,24 +175,57 @@ def video_details(project_id: str, key: str = Query(..., min_length=1), store: P
         details.status = annotation.status
         details.event_count = len(annotation.events)
         details.annotated_at = annotation.updated_at
-        details.annotation_file = str(store.annotation_path(project_id, key))
+        details.updated_by = annotation.updated_by
+        details.annotation_file = store.annotation_location(project_id, key)
         details.streaming_url = annotation.streaming_url
         details.duration_seconds = annotation.duration_seconds
     return details
 
 
 @router.delete("/annotations", response_model=ClearResult)
-def clear_annotation(project_id: str, key: str = Query(..., min_length=1), store: ProjectStore = Depends(get_store)):
-    """Clear a video's saved annotations (the file is moved to app_data/.trash)."""
+def clear_annotation(
+    project_id: str,
+    key: str = Query(..., min_length=1),
+    user: User = Depends(current_user),
+    store: Store = Depends(get_store),
+):
+    """Clear a video's saved annotations. Nothing is erased: the file goes to app_data/.trash, or the
+    database row is marked deleted."""
     project = store.get(project_id)
-    # Clearing only touches local files, so keys outside the current folder are fine.
+    # Clearing only touches stored annotations, so keys outside the current folder are fine.
     require_video_key(project, key, inside_prefix=False)
-    moved = store.clear_annotation(project_id, key)
+    moved = store.clear_annotation(project_id, key, by=user.name)
     return ClearResult(key=key, cleared=moved is not None, moved_to=str(moved) if moved else None)
 
 
+@router.post("/activity", response_model=ActivityResult)
+def activity(
+    project_id: str,
+    body: ActivityPing,
+    user: User = Depends(current_user),
+    store: Store = Depends(get_store),
+):
+    """Heartbeat from the Annotate view (every few seconds): records which video this user is on and
+    returns the saved state of every video plus who else is where. Never touches S3."""
+    as_of = utcnow()
+    project = store.get(project_id)
+    presence.touch(project_id, user, body.video_key)
+    videos = {
+        key: VideoState(
+            status=entry.status,
+            event_count=entry.event_count,
+            annotated_at=entry.updated_at,
+            updated_by=entry.updated_by,
+            revision=entry.revision,
+        )
+        for key, entry in store.load_index(project_id).items()
+        if belongs_to(entry.bucket, project) and key.startswith(project.storage.normalized_prefix)
+    }
+    return ActivityResult(as_of=as_of, videos=videos, presence=presence.others(project_id, user))
+
+
 @router.get("/annotations", response_model=VideoAnnotation | None)
-def get_annotation(project_id: str, key: str = Query(..., min_length=1), store: ProjectStore = Depends(get_store)):
+def get_annotation(project_id: str, key: str = Query(..., min_length=1), store: Store = Depends(get_store)):
     store.get(project_id)
     return store.get_annotation(project_id, key)
 
@@ -196,7 +235,8 @@ def save_annotation(
     project_id: str,
     body: AnnotationSave,
     key: str = Query(..., min_length=1),
-    store: ProjectStore = Depends(get_store),
+    user: User = Depends(current_user),
+    store: Store = Depends(get_store),
 ):
     project = store.get(project_id)
     require_video_key(project, key)
@@ -227,6 +267,11 @@ def save_annotation(
                 raise
             store.quarantine_annotation(project_id, key)  # unreadable: keep a copy, start fresh
             existing = None
+        current_revision = existing.revision if existing else None
+        # No silent overwrites: edits based on an older copy are refused (unless the client opted out
+        # by not sending base_revision).
+        if "base_revision" in body.model_fields_set and body.base_revision != current_revision:
+            raise annotation_conflict(existing, cleared=existing is None)
         # Frames saved under a different FPS setting are recomputed from their timestamps.
         refresh_frames = bool(existing and existing.fps and existing.fps != fps)
 
@@ -273,8 +318,41 @@ def save_annotation(
             labels=labels,
             created_at=existing.created_at if existing else now,
             updated_at=now,
+            revision=secrets.token_hex(8),
+            updated_by=user.name,
         )
-        return store.save_annotation(project_id, annotation)
+        try:
+            return store.save_annotation(project_id, annotation, expected_revision=current_revision)
+        except ConflictError as exc:
+            # Another server process saved in between (the store's compare-and-set caught it).
+            latest = store.get_annotation(project_id, key)
+            raise annotation_conflict(latest, cleared=latest is None) from exc
+
+
+def annotation_conflict(latest: VideoAnnotation | None, *, cleared: bool) -> ConflictError:
+    """409 telling the client its edits are based on an outdated copy, and what the current one is."""
+    who = (latest.updated_by if latest else None) or "Someone else"
+    if cleared:
+        message, hint = (
+            "This video's annotations were cleared while you were editing.",
+            "Keep yours to save them again, or reload to start from the cleared video.",
+        )
+    else:
+        message, hint = (
+            f"{who} saved this video while you were editing.",
+            "Load their version, or keep yours to overwrite it.",
+        )
+    return ConflictError(
+        message,
+        code="ANNOTATION_CONFLICT",
+        hint=hint,
+        details={
+            "revision": latest.revision if latest else None,
+            "updated_by": latest.updated_by if latest else None,
+            "updated_at": latest.updated_at.isoformat() if latest else None,
+            "cleared": cleared,
+        },
+    )
 
 
 def normalize_value(field: SchemaField, value: str | list[str] | None) -> str | list[str] | None:

@@ -1,9 +1,9 @@
 "use client";
 
-import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
-import type { AnnotationSave, Project, ProjectUpdate, VideoAnnotation, VideoList } from "@/lib/types";
+import type { ActivityResult, AnnotationSave, Project, ProjectUpdate, VideoAnnotation, VideoList } from "@/lib/types";
 
 export const keys = {
   projects: ["projects"] as const,
@@ -12,6 +12,7 @@ export const keys = {
   streamUrl: (id: string, key: string) => ["projects", id, "stream-url", key] as const,
   annotation: (id: string, key: string) => ["projects", id, "annotation", key] as const,
   details: (id: string, key: string) => ["projects", id, "details", key] as const,
+  activity: (id: string, key: string | null) => ["projects", id, "activity", key] as const,
 };
 
 export function useProjects() {
@@ -98,6 +99,72 @@ export function useAnnotation(id: string, key: string | null) {
   });
 }
 
+const ACTIVITY_INTERVAL_MS = 15_000;
+
+/**
+ * Bring other people's saves into the queue. Items saved after the snapshot (e.g. by this tab while
+ * the request was in flight) are left alone.
+ */
+function mergeActivity(qc: QueryClient, id: string, activity: ActivityResult) {
+  const asOf = new Date(activity.as_of).getTime();
+  const newerThanSnapshot = (iso: string | null) => iso != null && new Date(iso).getTime() > asOf;
+  qc.setQueryData<VideoList>(keys.videos(id), (prev) => {
+    if (!prev) return prev;
+    let changed = false;
+    const videos = prev.videos.flatMap((v) => {
+      if (newerThanSnapshot(v.annotated_at)) return [v];
+      const s = activity.videos[v.key];
+      if (s) {
+        if (
+          v.status === s.status &&
+          v.event_count === s.event_count &&
+          v.annotated_at === s.annotated_at &&
+          v.updated_by === s.updated_by
+        )
+          return [v];
+        changed = true;
+        return [
+          {
+            ...v,
+            status: s.status,
+            event_count: s.event_count,
+            annotated_at: s.annotated_at,
+            updated_by: s.updated_by,
+          },
+        ];
+      }
+      if (v.status === "not_started" && v.event_count === 0) return [v];
+      // Cleared by someone else. A video kept in the queue only by its annotations disappears.
+      changed = true;
+      return v.missing
+        ? []
+        : [{ ...v, status: "not_started" as const, event_count: 0, annotated_at: null, updated_by: null }];
+    });
+    return changed ? { ...prev, videos } : prev;
+  });
+}
+
+/**
+ * Heartbeat of the Annotate view: tells the server which video this user is on and returns everyone's
+ * saved progress plus who else is where. Cheap (no S3 calls); paused while the tab is in the background.
+ */
+export function useActivity(id: string, videoKey: string | null) {
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: keys.activity(id, videoKey),
+    queryFn: async () => {
+      const activity = await api.activity(id, videoKey);
+      mergeActivity(qc, id, activity);
+      return activity;
+    },
+    refetchInterval: ACTIVITY_INTERVAL_MS,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+    retry: false,
+    placeholderData: keepPreviousData,
+  });
+}
+
 export function useSaveAnnotation(id: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -111,7 +178,13 @@ export function useSaveAnnotation(id: string) {
               ...prev,
               videos: prev.videos.map((v) =>
                 v.key === key
-                  ? { ...v, status: saved.status, event_count: saved.events.length, annotated_at: saved.updated_at }
+                  ? {
+                      ...v,
+                      status: saved.status,
+                      event_count: saved.events.length,
+                      annotated_at: saved.updated_at,
+                      updated_by: saved.updated_by,
+                    }
                   : v,
               ),
             }

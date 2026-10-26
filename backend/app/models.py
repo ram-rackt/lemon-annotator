@@ -273,6 +273,16 @@ class VideoAnnotation(BaseModel):
     labels: dict[str, bool | str | list[str] | None] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
+    # Changes on every save; a save based on an older revision is refused instead of overwriting.
+    revision: str | None = None
+    updated_by: str | None = None
+
+    @model_validator(mode="after")
+    def _legacy_revision(self) -> "VideoAnnotation":
+        # Files saved before revisions existed get a stable one derived from their save time.
+        if not self.revision:
+            self.revision = f"t{int(self.updated_at.timestamp() * 1000)}"
+        return self
 
 
 class AnnotationSave(BaseModel):
@@ -282,14 +292,19 @@ class AnnotationSave(BaseModel):
     streaming_url: str | None = None
     streaming_url_expires_at: datetime | None = None
     duration_seconds: float | None = Field(None, ge=0)
+    # The revision these edits started from (null: "there was no saved annotation"). When sent and it no
+    # longer matches, the save is refused with a 409 conflict. Omit it to skip the check.
+    base_revision: str | None = None
 
 
 class IndexEntry(BaseModel):
     status: VideoStatus
     event_count: int
     updated_at: datetime
-    file: str
+    file: str = ""
     bucket: str | None = None
+    revision: str | None = None
+    updated_by: str | None = None
 
 
 class VideoItem(BaseModel):
@@ -300,6 +315,7 @@ class VideoItem(BaseModel):
     status: VideoStatus = "not_started"
     event_count: int = 0
     annotated_at: datetime | None = None
+    updated_by: str | None = None
     missing: bool = Field(False, description="Annotated locally but no longer in the bucket")
 
 
@@ -338,6 +354,7 @@ class VideoDetails(BaseModel):
     status: VideoStatus = "not_started"
     event_count: int = 0
     annotated_at: datetime | None = None
+    updated_by: str | None = None
     annotation_file: str | None = None
     streaming_url: str | None = None
     duration_seconds: float | None = None
@@ -366,6 +383,36 @@ class ExportResult(BaseModel):
     event_count: int
     warnings: list[str]
     data: dict
+
+
+class ActivityPing(BaseModel):
+    """Heartbeat from an open Annotate view: which video this user is on."""
+
+    video_key: str | None = Field(None, max_length=1024)
+
+
+class VideoState(BaseModel):
+    status: VideoStatus
+    event_count: int
+    annotated_at: datetime
+    updated_by: str | None = None
+    revision: str | None = None
+
+
+class PresenceEntry(BaseModel):
+    user_id: str
+    name: str
+    video_key: str | None
+    seen_at: datetime
+
+
+class ActivityResult(BaseModel):
+    """Saved state of every annotated video in the current folder, plus who else is working where."""
+
+    # Server time the snapshot was taken; saves made after it are not reflected.
+    as_of: datetime
+    videos: dict[str, VideoState]
+    presence: list[PresenceEntry]
 
 
 def _dedupe(items: list[str]) -> list[str]:

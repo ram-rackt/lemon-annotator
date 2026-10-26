@@ -1,10 +1,10 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, CloudOff, ExternalLink, FolderSearch, Keyboard, Settings2 } from "lucide-react";
+import { ChevronDown, ChevronUp, CloudOff, ExternalLink, FolderSearch, Keyboard, Settings2, Users } from "lucide-react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { ClearAnnotationsDialog } from "@/components/annotate/clear-annotations-dialog";
@@ -27,15 +27,16 @@ import { useHydrated } from "@/hooks/use-hydrated";
 import {
   keys,
   streamUrlQuery,
+  useActivity,
   useAnnotation,
   useProject,
   useSaveAnnotation,
   useStreamUrl,
   useVideos,
 } from "@/hooks/queries";
-import { api, errorMessage } from "@/lib/api";
+import { api, type ApiError, errorMessage, isConflict } from "@/lib/api";
 import { eventColor } from "@/lib/colors";
-import { formatTime, frameAt, newId } from "@/lib/format";
+import { formatTime, frameAt, joinNames, newId } from "@/lib/format";
 import { pendingSave } from "@/lib/pending-save";
 import {
   type DraftValues,
@@ -195,6 +196,23 @@ function readLastVideo(projectId: string): string | null {
 /** Autosave this long after the last change. */
 const AUTOSAVE_MS = 1200;
 
+/** A cached copy of a video's annotations older than this is re-checked when the video is opened. */
+const RECHECK_AFTER_MS = 10_000;
+
+/** The saved copy the editor's content is based on: what a save says it started from. */
+interface SavedBase {
+  key: string;
+  revision: string | null;
+  /** Server time of that save (null: nothing saved). Activity snapshots older than this are stale. */
+  savedAt: string | null;
+}
+
+const baseOf = (key: string, data: VideoAnnotation | null | undefined): SavedBase => ({
+  key,
+  revision: data?.revision ?? null,
+  savedAt: data?.updated_at ?? null,
+});
+
 function pickInitial(videos: VideoItem[], requested: string | null): string | null {
   if (requested && videos.some((v) => v.key === requested)) return requested;
   return videos.find((v) => v.status !== "completed" && !v.missing)?.key ?? videos[0]?.key ?? null;
@@ -285,6 +303,8 @@ function Workspace({
   const urlQ = useStreamUrl(projectId, activeKey);
   const annQ = useAnnotation(projectId, activeKey);
   const saveMut = useSaveAnnotation(projectId);
+  const activityQ = useActivity(projectId, activeKey);
+  const activity = activityQ.data;
 
   // Local, editable copy of the active video's events.
   const [events, setEvents] = useState<AnnotationEvent[]>([]);
@@ -295,6 +315,9 @@ function Workspace({
   const versionRef = useRef(0);
   /** versionRef value covered by the last successful save (nothing newer to write when equal). */
   const savedVersionRef = useRef(0);
+  /** The saved copy the editor is based on. Saves send its revision; the server refuses outdated ones. */
+  const baseRef = useRef<SavedBase | null>(null);
+  const [adopted, setAdopted] = useState<SavedBase | null>(null);
 
   const [draft, setDraft] = useState<DraftValues>(() => emptyDraft(schema));
   const [draftSchema, setDraftSchema] = useState(schema);
@@ -317,6 +340,7 @@ function Workspace({
   // Adopt server data once per video switch (derived-state pattern, no effect needed).
   if (activeKey && annQ.isSuccess && loadedKey !== activeKey) {
     setLoadedKey(activeKey);
+    setAdopted(baseOf(activeKey, annQ.data));
     setEvents(sortEvents(annQ.data?.events ?? []));
     setLabels(withLabelDefaults(schema, annQ.data?.labels));
     setDirty(false);
@@ -324,6 +348,10 @@ function Workspace({
     setEditingId(null);
     setPreEditDraft(null);
   }
+  // Before any save can run (layout effects run ahead of timers and user input).
+  useLayoutEffect(() => {
+    if (adopted) baseRef.current = adopted;
+  }, [adopted]);
   const ready = Boolean(activeKey) && loadedKey === activeKey;
   const activeVideo = videos.find((v) => v.key === activeKey) ?? null;
   const editingIndex = editingId ? events.findIndex((e) => e.id === editingId) : -1;
@@ -349,6 +377,11 @@ function Workspace({
     const cached = qc.getQueryData<StreamUrl>(keys.streamUrl(projectId, key));
     if (cached && new Date(cached.expires_at).getTime() - Date.now() < 3 * 60_000) {
       qc.removeQueries({ queryKey: keys.streamUrl(projectId, key) });
+    }
+    // A copy cached a while ago (e.g. prefetched for Save & Next) may be outdated: show it, but re-check.
+    const saved = qc.getQueryState(keys.annotation(projectId, key));
+    if (saved?.dataUpdatedAt && Date.now() - saved.dataUpdatedAt > RECHECK_AFTER_MS) {
+      qc.invalidateQueries({ queryKey: keys.annotation(projectId, key) });
     }
     setActiveKey(key);
     setLoadedKey(null);
@@ -419,6 +452,7 @@ function Workspace({
     const previous = qc.getQueryData<VideoAnnotation | null>(keys.annotation(projectId, key))?.status;
     const status = mode === "complete" || previous === "completed" ? "completed" : "in_progress";
     const url = urlQ.data?.key === key ? urlQ.data : undefined;
+    const base = baseRef.current?.key === key ? baseRef.current : null;
     try {
       const saved = await saveMut.mutateAsync({
         key,
@@ -429,8 +463,10 @@ function Workspace({
           streaming_url: url?.url ?? null,
           streaming_url_expires_at: url?.expires_at ?? null,
           duration_seconds: playerRef.current?.getDuration() || null,
+          base_revision: base?.revision ?? null,
         },
       });
+      if (activeKeyRef.current === key) baseRef.current = baseOf(key, saved);
       // Only mark clean if nothing changed while the request was in flight.
       savedVersionRef.current = Math.max(savedVersionRef.current, version);
       if (versionRef.current === version && activeKeyRef.current === key) {
@@ -443,10 +479,78 @@ function Workspace({
       }
       return saved;
     } catch (err) {
-      const { title, hint } = errorMessage(err);
-      toast.error(`Save failed: ${title}`, { description: hint ?? undefined });
+      if (isConflict(err)) {
+        showConflict(key, err);
+      } else {
+        const { title, hint } = errorMessage(err);
+        toast.error(`Save failed: ${title}`, { description: hint ?? undefined });
+      }
       throw err;
     }
+  };
+
+  /* ------------------------- shared editing (conflicts) ------------------------ */
+
+  /** Replace the editor's content with a saved copy (someone else's newer save, or a reload). */
+  const adoptServerCopy = (key: string, data: VideoAnnotation | null) => {
+    if (editingId) {
+      // The edited event may have changed or gone: leave edit mode and restore the capture values.
+      setEditingId(null);
+      setShowRequired(false);
+      setDraft(preEditDraft ?? emptyDraft(schema));
+      setPreEditDraft(null);
+    }
+    setEvents(sortEvents(data?.events ?? []));
+    setLabels(withLabelDefaults(schema, data?.labels));
+    setDirty(false);
+    baseRef.current = baseOf(key, data);
+    // Nothing left to save: an autosave queued for the replaced content must not write it back.
+    versionRef.current++;
+    savedVersionRef.current = versionRef.current;
+    pendingSave.register(projectId, null);
+  };
+
+  /** "Load theirs": discard local edits and show the saved copy. */
+  const loadServerCopy = async (key: string) => {
+    try {
+      const data = await qc.fetchQuery({
+        queryKey: keys.annotation(projectId, key),
+        queryFn: () => api.getAnnotation(projectId, key),
+        staleTime: 0,
+      });
+      if (activeKeyRef.current !== key) return;
+      adoptRef.current(key, data);
+      toast.success("Loaded the saved version", { duration: 2000 });
+    } catch (err) {
+      const { title, hint } = errorMessage(err);
+      toast.error(`Couldn't load it: ${title}`, { description: hint ?? undefined });
+    }
+  };
+
+  /** "Keep mine": save the local edits on top of the copy that was saved meanwhile. */
+  const keepMine = (key: string, revision: string | null, savedAt: string | null) => {
+    if (activeKeyRef.current !== key) {
+      toast.error("Switch back to that video to keep your changes.");
+      return;
+    }
+    baseRef.current = { key, revision, savedAt };
+    saveRef
+      .current("save")
+      .then((s) => s && toast.success("Saved your version", { duration: 2000 }))
+      .catch(() => {});
+  };
+
+  const showConflict = (key: string, err: ApiError) => {
+    const d = err.details as { revision?: string | null; updated_at?: string | null; cleared?: boolean };
+    toast.error(err.message, {
+      id: `conflict:${key}`,
+      description: d.cleared
+        ? "Your changes are not saved. Keep them to save them again, or reload the cleared video."
+        : "Your changes are not saved. Load their version (yours are discarded), or keep yours (replaces theirs).",
+      duration: Infinity,
+      action: { label: d.cleared ? "Reload" : "Load theirs", onClick: () => void loadServerCopy(key) },
+      cancel: { label: "Keep mine", onClick: () => keepMine(key, d.revision ?? null, d.updated_at ?? null) },
+    });
   };
 
   const saveOnly = () => {
@@ -507,12 +611,40 @@ function Workspace({
   // cleared on purpose. A ref keeps the timer from restarting on unrelated re-renders.
   const saveRef = useRef(save);
   const flushRef = useRef<() => void>(() => {});
+  const adoptRef = useRef(adoptServerCopy);
   useEffect(() => {
     saveRef.current = save;
+    adoptRef.current = adoptServerCopy;
     flushRef.current = () => {
       if (dirty && ready) save("save").catch(() => {});
     };
   });
+
+  // Someone else saved (or cleared) the open video and it was re-read: take their copy, unless there
+  // are local edits (saving those will then ask which version to keep).
+  useEffect(() => {
+    const base = baseRef.current;
+    if (!ready || !activeKey || annQ.data === undefined || base?.key !== activeKey) return;
+    if ((annQ.data?.revision ?? null) === base.revision || dirty || saveMut.isPending) return;
+    adoptRef.current(activeKey, annQ.data);
+    toast.info(
+      annQ.data
+        ? `Updated with ${annQ.data.updated_by ?? "someone else"}'s latest save`
+        : "Someone cleared this video's annotations",
+      { duration: 4000 },
+    );
+  }, [annQ.data, activeKey, ready, dirty, saveMut.isPending]);
+
+  // The heartbeat says the open video changed on the server: re-read it (the effect above applies it).
+  useEffect(() => {
+    const base = baseRef.current;
+    if (!activity || !ready || !activeKey || dirty || base?.key !== activeKey) return;
+    // A snapshot taken before the copy on screen was saved can't tell anything new.
+    if (base.savedAt && new Date(activity.as_of).getTime() < new Date(base.savedAt).getTime()) return;
+    if ((activity.videos[activeKey]?.revision ?? null) !== base.revision) {
+      qc.invalidateQueries({ queryKey: keys.annotation(projectId, activeKey) });
+    }
+  }, [activity, activeKey, ready, dirty, projectId, qc]);
   useEffect(() => {
     if (!dirty || !ready) return;
     const id = setTimeout(() => saveRef.current("save").catch(() => {}), AUTOSAVE_MS);
@@ -699,6 +831,7 @@ function Workspace({
       setLabels(withLabelDefaults(schema, undefined));
       setEvents([]);
       setDirty(false);
+      baseRef.current = baseOf(video.key, null);
       pendingSave.register(projectId, null);
       setEditingId(null);
       setPreEditDraft(null);
@@ -708,7 +841,7 @@ function Workspace({
       savedVersionRef.current = versionRef.current;
     }
     toast.success(`Cleared annotations for ${video.filename}`, {
-      description: movedTo ? `Previous file moved to ${movedTo}` : undefined,
+      description: movedTo ? `Previous version kept at ${movedTo}` : undefined,
     });
   };
 
@@ -855,6 +988,8 @@ function Workspace({
 
   const status = annQ.data?.status ?? "not_started";
   const completedCount = videos.filter((v) => v.status === "completed").length;
+  const presence = activity?.presence ?? [];
+  const othersHere = presence.filter((p) => p.video_key === activeKey);
   const columns = `${prefs.queueOpen ? "20rem" : "3.25rem"} minmax(0,1fr) ${prefs.panelOpen ? "21rem" : "3.25rem"}`;
 
   return (
@@ -881,6 +1016,7 @@ function Workspace({
             onOpenVideo={openVideoInTab}
             onClear={setClearVideo}
             storageKey={`lemon.queue.${projectId}`}
+            presence={presence}
           />
         </div>
         {!prefs.queueOpen && <QueueRail completed={completedCount} total={videos.length} onExpand={toggleQueue} />}
@@ -897,6 +1033,20 @@ function Workspace({
                 <Badge variant="outline" className="border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
                   Completed
                 </Badge>
+              )}
+              {othersHere.length > 0 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge variant="outline" className="shrink-0 border-sky-500/40 text-sky-700 dark:text-sky-300">
+                      <Users /> {joinNames(othersHere.map((p) => p.name))} {othersHere.length === 1 ? "is" : "are"} also
+                      here
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-64">
+                    Saves are checked against each other: if you both change this video, whoever saves second chooses
+                    which version to keep. Nothing is overwritten silently.
+                  </TooltipContent>
+                </Tooltip>
               )}
             </div>
           </div>

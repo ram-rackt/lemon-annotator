@@ -1,8 +1,13 @@
 import { type NextRequest, NextResponse } from "next/server";
 
-// Lemon only serves this machine. Rejecting requests whose Host isn't local stops a malicious web
-// page from using DNS rebinding to reach the API (projects, presigned URLs) through this server.
+// Without sign-in, Lemon only serves this machine. Rejecting requests whose Host isn't local stops a
+// malicious web page from using DNS rebinding to reach the API (projects, presigned URLs) through this
+// server. With sign-in (hosted setup) the API checks every request's token instead.
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+const SIGN_IN_ENABLED = Boolean(
+  process.env.NEXT_PUBLIC_SUPABASE_URL &&
+  (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+);
 
 function hostname(host: string | null): string {
   if (!host) return "";
@@ -12,7 +17,7 @@ function hostname(host: string | null): string {
 }
 
 export function proxy(request: NextRequest) {
-  if (!LOCAL_HOSTS.has(hostname(request.headers.get("host")))) {
+  if (!SIGN_IN_ENABLED && !LOCAL_HOSTS.has(hostname(request.headers.get("host")))) {
     return NextResponse.json(
       {
         error: {

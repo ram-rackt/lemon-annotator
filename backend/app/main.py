@@ -1,13 +1,16 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import __version__
+from .auth import current_user
 from .config import get_settings
+from .db_store import DatabaseStore
 from .deps import get_store
 from .errors import AppError
 from .routers import export, projects, videos
@@ -18,10 +21,25 @@ log = logging.getLogger("lemon")
 settings = get_settings()
 
 
+def _check_deployment() -> None:
+    """Refuse to start on a hosted server in a setup that would lose data or be unreachable."""
+    if not os.environ.get("RENDER"):
+        return
+    settings = get_settings()
+    if not settings.database_url:
+        raise RuntimeError(
+            "LEMON_DATABASE_URL is not set. Render's disk is wiped on every deploy, so Lemon needs the "
+            "Supabase database there. Add it under Environment in the Render dashboard."
+        )
+    if not settings.auth_enabled:
+        raise RuntimeError("LEMON_SUPABASE_URL is not set. A hosted Lemon must require sign-in.")
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    log.info("Data directory: %s", get_store().root)
+    _check_deployment()
+    store = get_store()
+    log.info("Storage: %s, sign-in %s", store.root, "required" if get_settings().auth_enabled else "off (local only)")
     yield
 
 
@@ -36,9 +54,11 @@ def _hostname(host: str) -> str:
 
 @app.middleware("http")
 async def only_local_hosts(request: Request, call_next):
-    """Reject requests whose Host header isn't this machine, so a malicious web page can't reach the
-    API through DNS rebinding."""
-    if _hostname(request.headers.get("host", "")) not in get_settings().allowed_host_set:
+    """Without sign-in, reject requests whose Host header isn't this machine, so a malicious web page
+    can't reach the API through DNS rebinding. With sign-in, every request needs a valid token instead."""
+    current = get_settings()
+    hosts = current.allowed_host_set
+    if not current.auth_enabled and "*" not in hosts and _hostname(request.headers.get("host", "")) not in hosts:
         return JSONResponse(
             status_code=403,
             content={"error": {"code": "FORBIDDEN_HOST", "message": "Lemon only accepts requests from this computer.",
@@ -53,6 +73,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    max_age=600,
 )
 
 
@@ -88,16 +109,25 @@ async def unhandled_error_handler(_: Request, exc: Exception):
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "INTERNAL_ERROR", "message": str(exc) or "Internal server error",
-                           "hint": "See the API terminal for the stack trace.", "details": {}}},
+                           "hint": "See the API logs for the stack trace.", "details": {}}},
     )
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "version": __version__, "data_dir": str(get_store().root)}
+    """Public: used by the dev runner and Render's health check. Contains no project data."""
+    store = get_store()
+    return {
+        "ok": True,
+        "version": __version__,
+        "data_dir": str(store.root),
+        "storage": "database" if isinstance(store, DatabaseStore) else "files",
+        "auth": get_settings().auth_enabled,
+    }
 
 
-app.include_router(projects.router)
-app.include_router(videos.router)
-app.include_router(export.router)
-
+# Every other endpoint requires a signed-in user (when sign-in is configured).
+signed_in = [Depends(current_user)]
+app.include_router(projects.router, dependencies=signed_in)
+app.include_router(videos.router, dependencies=signed_in)
+app.include_router(export.router, dependencies=signed_in)

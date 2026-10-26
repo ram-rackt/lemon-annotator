@@ -30,7 +30,7 @@ from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
 
-from .errors import NotFoundError, StorageError, ValidationError
+from .errors import ConflictError, NotFoundError, StorageError, ValidationError
 from .models import (
     IndexEntry,
     ProgressStats,
@@ -43,6 +43,35 @@ log = logging.getLogger(__name__)
 
 PROJECT_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,80}")
 INDEX_FILE = "_index.json"
+
+# save_annotation(expected_revision=ANY_REVISION) skips the "nobody saved in between" check.
+ANY_REVISION = object()
+
+
+def revision_conflict() -> ConflictError:
+    return ConflictError("This video was saved by someone else in the meantime.", code="ANNOTATION_CONFLICT")
+
+
+def progress_stats(project: Project, index: dict[str, IndexEntry]) -> ProgressStats:
+    """Progress of what the queue shows: the current bucket and folder. Annotations left from an
+    earlier folder stay stored but are not counted against this folder's videos."""
+    stats = ProgressStats()
+    prefix = project.storage.normalized_prefix
+    for key, entry in index.items():
+        if entry.status in ("completed", "in_progress"):
+            stats.all_annotated += 1
+        if entry.bucket not in (None, project.storage.bucket) or not key.startswith(prefix):
+            continue
+        if entry.status == "completed":
+            stats.completed += 1
+        elif entry.status == "in_progress":
+            stats.in_progress += 1
+        stats.total_events += entry.event_count
+    return stats
+
+
+def export_file_name(project: Project) -> str:
+    return f"{slugify(project.name)}_{timestamp()}.json"
 
 # Short enough that <data_dir>/.trash/<project>/cleared-annotations/<name> stays under Windows'
 # 260-character path limit for ordinary install locations. The hash keeps names unique.
@@ -78,7 +107,7 @@ def unique_path(path: Path) -> Path:
     return candidate
 
 
-def _json_default(obj: Any) -> Any:
+def json_default(obj: Any) -> Any:
     if isinstance(obj, datetime):
         return obj.isoformat()
     raise TypeError(f"Not JSON serializable: {type(obj)!r}")
@@ -106,7 +135,7 @@ def write_json_atomic(path: Path, data: Any, *, create_dirs: bool = False) -> No
         path.parent.mkdir(parents=True, exist_ok=True)
     elif not path.parent.is_dir():
         raise StorageError(f"Folder {path.parent} no longer exists.", code="LOCAL_DIR_MISSING")
-    payload = json.dumps(data, indent=2, ensure_ascii=False, default=_json_default)
+    payload = json.dumps(data, indent=2, ensure_ascii=False, default=json_default)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".part")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
@@ -237,7 +266,7 @@ class ProjectStore:
             write_json_atomic(path, project.model_dump(mode="json"))
         return project
 
-    def delete(self, project_id: str) -> Path:
+    def delete(self, project_id: str, by: str | None = None) -> Path:
         with self.lock(project_id):
             src = self._require_project(project_id)
             dest = unique_path(self.trash_dir / f"{project_id}_{timestamp()}")
@@ -254,6 +283,11 @@ class ProjectStore:
             if entry and (ann_dir / entry.file).is_file():
                 return ann_dir / entry.file
             return ann_dir / video_file_name(key)
+
+    def annotation_location(self, project_id: str, key: str) -> str | None:
+        """Where this video's saved annotations are, for display."""
+        path = self.annotation_path(project_id, key)
+        return str(path) if path.exists() else None
 
     def get_annotation(self, project_id: str, key: str) -> VideoAnnotation | None:
         with self.lock(project_id):
@@ -281,7 +315,7 @@ class ProjectStore:
             log.warning("Moved unreadable annotation %s to %s", src.name, dest)
             return dest
 
-    def clear_annotation(self, project_id: str, key: str) -> Path | None:
+    def clear_annotation(self, project_id: str, key: str, by: str | None = None) -> Path | None:
         """Remove a video's saved annotations. The file is moved to app_data/.trash, never erased.
         Returns where it went, or None if nothing was saved."""
         with self.lock(project_id):
@@ -297,20 +331,22 @@ class ProjectStore:
                 self._write_index(project_id, index)
         return dest
 
-    def save_annotation(self, project_id: str, annotation: VideoAnnotation) -> VideoAnnotation:
+    def save_annotation(
+        self, project_id: str, annotation: VideoAnnotation, expected_revision: object = ANY_REVISION
+    ) -> VideoAnnotation:
+        """Write a video's annotations. With `expected_revision` (None: "nothing saved yet"), the write
+        only happens if the saved copy is still at that revision; otherwise ConflictError."""
         if not annotation.video_key:
             raise ValidationError("video_key is required")
         with self.lock(project_id):
+            if expected_revision is not ANY_REVISION:
+                current = self.get_annotation(project_id, annotation.video_key)
+                if (current.revision if current else None) != expected_revision:
+                    raise revision_conflict()
             index = self.load_index(project_id)
             path = self.annotation_path(project_id, annotation.video_key, index)
             write_json_atomic(path, annotation.model_dump(mode="json"))
-            index[annotation.video_key] = IndexEntry(
-                status=annotation.status,
-                event_count=len(annotation.events),
-                updated_at=annotation.updated_at,
-                file=path.name,
-                bucket=annotation.bucket,
-            )
+            index[annotation.video_key] = _index_entry(annotation, path.name)
             self._write_index(project_id, index)
         return annotation
 
@@ -329,7 +365,9 @@ class ProjectStore:
                         for e in os.scandir(ann_dir)
                         if e.is_file() and e.name.endswith(".json") and e.name != INDEX_FILE and not e.name.startswith(".")
                     }
-                    if on_disk == {entry.file for entry in index.values()}:
+                    # Entries written before revisions existed lack one: rebuild to pick it up.
+                    in_sync = on_disk == {entry.file for entry in index.values()}
+                    if in_sync and all(entry.revision for entry in index.values()):
                         return index
                     log.info("Index for %s is out of sync with its files; rebuilding", project_id)
                 except (StorageError, PydanticValidationError, AttributeError) as exc:
@@ -347,13 +385,7 @@ class ProjectStore:
             except Exception as exc:
                 log.warning("Ignoring unreadable annotation %s: %s", file.name, exc)
                 continue
-            index[ann.video_key] = IndexEntry(
-                status=ann.status,
-                event_count=len(ann.events),
-                updated_at=ann.updated_at,
-                file=file.name,
-                bucket=ann.bucket,
-            )
+            index[ann.video_key] = _index_entry(ann, file.name)
         self._write_index(project_id, index)
         return index
 
@@ -377,30 +409,28 @@ class ProjectStore:
         return out, warnings
 
     def stats(self, project: Project) -> ProgressStats:
-        """Progress of what the queue shows: the current bucket and folder. Annotations left from an
-        earlier folder stay on disk but are not counted against this folder's videos."""
-        stats = ProgressStats()
         try:
-            index = self.load_index(project.id)
+            return progress_stats(project, self.load_index(project.id))
         except (StorageError, NotFoundError):
-            return stats
-        prefix = project.storage.normalized_prefix
-        for key, entry in index.items():
-            if entry.status in ("completed", "in_progress"):
-                stats.all_annotated += 1
-            if entry.bucket not in (None, project.storage.bucket) or not key.startswith(prefix):
-                continue
-            if entry.status == "completed":
-                stats.completed += 1
-            elif entry.status == "in_progress":
-                stats.in_progress += 1
-            stats.total_events += entry.event_count
-        return stats
+            return ProgressStats()
 
     # --------------------------------------------------------------- exports
-    def write_export(self, project: Project, data: dict) -> Path:
+    def write_export(self, project: Project, data: dict, by: str | None = None) -> tuple[str, str]:
+        """Keep a copy of an export. Returns (file name, where it was stored)."""
         with self.lock(project.id):
             exports = self._require_project(project.id) / "exports"
-            path = unique_path(exports / f"{slugify(project.name)}_{timestamp()}.json")
+            path = unique_path(exports / export_file_name(project))
             write_json_atomic(path, data, create_dirs=True)
-        return path
+        return path.name, str(path)
+
+
+def _index_entry(ann: VideoAnnotation, file: str) -> IndexEntry:
+    return IndexEntry(
+        status=ann.status,
+        event_count=len(ann.events),
+        updated_at=ann.updated_at,
+        file=file,
+        bucket=ann.bucket,
+        revision=ann.revision,
+        updated_by=ann.updated_by,
+    )

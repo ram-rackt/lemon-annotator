@@ -29,8 +29,8 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { copyText } from "@/lib/clipboard";
-import { formatBytes } from "@/lib/format";
-import type { VideoItem } from "@/lib/types";
+import { formatBytes, formatRelative, initials, joinNames } from "@/lib/format";
+import type { PresenceEntry, VideoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Filter = "all" | "todo" | "done";
@@ -60,6 +60,8 @@ interface Props {
   onClear: (video: VideoItem) => void;
   /** localStorage key under which the filter and search are remembered (per project). */
   storageKey: string;
+  /** Other people with this project open (hosted setup). */
+  presence: PresenceEntry[];
 }
 
 function readQueueView(storageKey: string): { query: string; filter: Filter } {
@@ -90,7 +92,13 @@ export function VideoQueue({
   onOpenVideo,
   onClear,
   storageKey,
+  presence,
 }: Props) {
+  const viewers = useMemo(() => {
+    const byKey = new Map<string, PresenceEntry[]>();
+    for (const p of presence) if (p.video_key) byKey.set(p.video_key, [...(byKey.get(p.video_key) ?? []), p]);
+    return byKey;
+  }, [presence]);
   const [query, setQuery] = useState(() => readQueueView(storageKey).query);
   const [filter, setFilter] = useState<Filter>(() => readQueueView(storageKey).filter);
   useEffect(() => {
@@ -170,6 +178,14 @@ export function VideoQueue({
             <span>{pct}%</span>
           </div>
           <Progress value={pct} className="h-1.5 [&>div]:bg-emerald-500" />
+          {presence.length > 0 && (
+            <p
+              className="truncate text-xs text-sky-700 dark:text-sky-300"
+              title={joinNames(presence.map((p) => p.name))}
+            >
+              Also here: {joinNames(presence.map((p) => p.name))}
+            </p>
+          )}
         </div>
         <div className="relative">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -207,6 +223,8 @@ export function VideoQueue({
           const rel = v.key.startsWith(prefix) ? v.key.slice(prefix.length) : v.key;
           const folder = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/") + 1) : "";
           const canClear = v.status !== "not_started" || v.event_count > 0 || (active && activeEventCount > 0);
+          const here = viewers.get(v.key) ?? [];
+          const savedBy = v.updated_by ? ` · Saved by ${v.updated_by} ${formatRelative(v.annotated_at)}` : "";
           return (
             <ContextMenu key={v.key}>
               <ContextMenuTrigger asChild>
@@ -215,7 +233,7 @@ export function VideoQueue({
                   type="button"
                   aria-current={active ? "true" : undefined}
                   onClick={() => onSelect(v.key)}
-                  title={`${v.key} · Right-click for options`}
+                  title={`${v.key}${savedBy} · Right-click for options`}
                   className={cn(
                     "group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors [content-visibility:auto] [contain-intrinsic-size:auto_56px]",
                     active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60 data-[state=open]:bg-muted/60",
@@ -234,6 +252,21 @@ export function VideoQueue({
                       {v.size != null && <span className="shrink-0">{formatBytes(v.size)}</span>}
                     </div>
                   </div>
+                  {here.length > 0 && (
+                    <span
+                      className="flex shrink-0 -space-x-1.5"
+                      aria-label={`${joinNames(here.map((p) => p.name))} on this video`}
+                    >
+                      {here.slice(0, 3).map((p) => (
+                        <span
+                          key={p.user_id}
+                          className="grid size-5 place-items-center rounded-full bg-sky-500 text-[9px] font-semibold text-white ring-2 ring-background"
+                        >
+                          {initials(p.name)}
+                        </span>
+                      ))}
+                    </span>
+                  )}
                   {v.event_count > 0 && (
                     <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground tabular-nums group-aria-[current=true]:bg-background">
                       {v.event_count}

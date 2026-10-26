@@ -1,0 +1,25 @@
+# Render Blueprint for the Lemon API (FastAPI). Render > New > Blueprint > pick this repository.
+# Secrets marked `sync: false` are asked for when the Blueprint is created.
+services:
+  - type: web
+    name: lemon-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # One process: presence and per-project locks live in memory (saves are safe across processes anyway).
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      # Supabase > Connect > Session pooler (postgresql://postgres.<ref>:<password>@...pooler.supabase.com:5432/postgres)
+      - key: LEMON_DATABASE_URL
+        sync: false
+      # https://<ref>.supabase.co
+      - key: LEMON_SUPABASE_URL
+        sync: false
+      # Your Vercel site, e.g. https://lemon-annotator.vercel.app (comma-separate several)
+      - key: LEMON_CORS_ORIGINS
+        sync: false

@@ -89,6 +89,8 @@ export interface VideoItem {
   status: VideoStatus;
   event_count: number;
   annotated_at: string | null;
+  /** Who saved it last (hosted setup with sign-in). */
+  updated_by: string | null;
   missing: boolean;
 }
 
@@ -129,6 +131,7 @@ export interface VideoDetails {
   status: VideoStatus;
   event_count: number;
   annotated_at: string | null;
+  updated_by: string | null;
   annotation_file: string | null;
   streaming_url: string | null;
   duration_seconds: number | null;
@@ -173,6 +176,9 @@ export interface VideoAnnotation {
   labels: Record<string, LabelValue>;
   created_at: string;
   updated_at: string;
+  /** Changes on every save. Saves send the revision they started from, so nothing is silently overwritten. */
+  revision: string;
+  updated_by: string | null;
 }
 
 export interface AnnotationSave {
@@ -182,6 +188,32 @@ export interface AnnotationSave {
   streaming_url?: string | null;
   streaming_url_expires_at?: string | null;
   duration_seconds?: number | null;
+  /** Revision these edits are based on; null means "nothing was saved for this video". */
+  base_revision: string | null;
+}
+
+/** Saved state of one video, from the activity heartbeat. */
+export interface VideoState {
+  status: VideoStatus;
+  event_count: number;
+  annotated_at: string;
+  updated_by: string | null;
+  revision: string | null;
+}
+
+/** Someone else with the project open, and the video they are on. */
+export interface PresenceEntry {
+  user_id: string;
+  name: string;
+  video_key: string | null;
+  seen_at: string;
+}
+
+export interface ActivityResult {
+  /** Server time of this snapshot; saves made after it are not reflected. */
+  as_of: string;
+  videos: Record<string, VideoState>;
+  presence: PresenceEntry[];
 }
 
 export interface ConnectionTestResult {

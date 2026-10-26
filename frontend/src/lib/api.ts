@@ -1,4 +1,8 @@
+import { toast } from "sonner";
+
+import { accessToken, supabase } from "./supabase";
 import type {
+  ActivityResult,
   AnnotationSave,
   ClearResult,
   ConnectionTestResult,
@@ -11,6 +15,17 @@ import type {
   VideoDetails,
   VideoList,
 } from "./types";
+
+/**
+ * Hosted: the API's own address (e.g. https://lemon-api.onrender.com); the browser calls it directly,
+ * which avoids proxy time limits on long bucket listings. Locally: empty, so requests go to this site's
+ * /api, which Next.js forwards to the backend.
+ */
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/+$/, "");
+
+const UNREACHABLE_HINT = API_URL
+  ? "The server may be waking up (free hosting sleeps when idle; this takes up to a minute). Try again shortly."
+  : "Make sure the backend is running (npm run dev from the repo root).";
 
 export class ApiError extends Error {
   constructor(
@@ -25,20 +40,28 @@ export class ApiError extends Error {
   }
 }
 
+/** The sign-in is no longer accepted: say why, then show the sign-in screen. */
+function endSession(message: string) {
+  const sb = supabase();
+  if (!sb) return;
+  toast.error(message, { id: "session-ended" });
+  void sb.auth.signOut();
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = await accessToken();
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await fetch(API_URL + path, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...init?.headers,
+      },
     });
   } catch {
-    throw new ApiError(
-      "Cannot reach the Lemon API.",
-      0,
-      "API_UNREACHABLE",
-      "Make sure the backend is running (npm run dev from the repo root).",
-    );
+    throw new ApiError("Cannot reach the Lemon API.", 0, "API_UNREACHABLE", UNREACHABLE_HINT);
   }
 
   if (res.ok) {
@@ -57,15 +80,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     body as { error?: { code?: string; message?: string; hint?: string; details?: Record<string, unknown> } }
   )?.error;
   if (err?.message) {
+    if (res.status === 401 || err.code === "AUTH_FORBIDDEN") endSession(err.message);
     throw new ApiError(err.message, res.status, err.code, err.hint ?? null, err.details ?? {});
   }
-  if (res.status === 500 || res.status === 502 || res.status === 504) {
-    // Next.js proxy returns a bare 500 when FastAPI is down.
+  if (res.status === 500 || res.status === 502 || res.status === 503 || res.status === 504) {
+    // The local Next.js proxy returns a bare 500 when FastAPI is down; hosts return 502/503 while waking.
     throw new ApiError(
       "The Lemon API did not respond.",
       res.status,
       "API_UNREACHABLE",
-      "Start the backend: npm run dev (repo root) or uvicorn app.main:app --port 8000.",
+      API_URL ? UNREACHABLE_HINT : "Start the backend: npm run dev (repo root) or uvicorn app.main:app --port 8000.",
     );
   }
   throw new ApiError(`Request failed (${res.status})`, res.status);
@@ -103,7 +127,13 @@ export const api = {
       body: json(body),
     }),
   exportProject: (id: string) => request<ExportResult>(`/api/projects/${id}/export`, { method: "POST" }),
+  activity: (id: string, videoKey: string | null) =>
+    request<ActivityResult>(`/api/projects/${id}/activity`, { method: "POST", body: json({ video_key: videoKey }) }),
 };
+
+/** A save refused because someone else saved (or cleared) the video since these edits started. */
+export const isConflict = (error: unknown): error is ApiError =>
+  error instanceof ApiError && error.code === "ANNOTATION_CONFLICT";
 
 export function errorMessage(error: unknown): { title: string; hint: string | null } {
   if (error instanceof ApiError) return { title: error.message, hint: error.hint };

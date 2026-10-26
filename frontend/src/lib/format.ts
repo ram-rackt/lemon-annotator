@@ -52,3 +52,14 @@ export function newId(): string {
 export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
+
+/** "Alex", "Alex and Sam", "Alex, Sam and Kim". */
+export function joinNames(names: string[]): string {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/** "A" for "alex", "AS" for "Alex Smith". */
+export function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  return (parts.length > 1 ? parts[0][0] + parts.at(-1)![0] : (parts[0]?.[0] ?? "?")).toUpperCase();
+}

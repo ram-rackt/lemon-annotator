@@ -34,7 +34,7 @@ import {
   useStreamUrl,
   useVideos,
 } from "@/hooks/queries";
-import { api, type ApiError, errorMessage, isConflict } from "@/lib/api";
+import { api, ApiError, errorMessage, isConflict } from "@/lib/api";
 import { eventColor } from "@/lib/colors";
 import { formatTime, frameAt, joinNames, newId } from "@/lib/format";
 import { pendingSave } from "@/lib/pending-save";
@@ -315,6 +315,7 @@ function Workspace({
   const versionRef = useRef(0);
   /** versionRef value covered by the last successful save (nothing newer to write when equal). */
   const savedVersionRef = useRef(0);
+  const [contentVersion, setContentVersion] = useState(0);
   /** The saved copy the editor is based on. Saves send its revision; the server refuses outdated ones. */
   const baseRef = useRef<SavedBase | null>(null);
   const [adopted, setAdopted] = useState<SavedBase | null>(null);
@@ -357,16 +358,23 @@ function Workspace({
   const editingIndex = editingId ? events.findIndex((e) => e.id === editingId) : -1;
   const editing = editingIndex >= 0 ? { event: events[editingIndex], index: editingIndex } : null;
 
+  /** Count a content change. The state copy is rendered together with `events`/`labels`, so a save can
+   * record exactly which version its content is (versionRef alone may already be ahead of a render). */
+  const bumpVersion = () => {
+    versionRef.current++;
+    setContentVersion(versionRef.current);
+  };
+
   const mutateEvents = (fn: (prev: AnnotationEvent[]) => AnnotationEvent[]) => {
     setEvents((prev) => sortEvents(fn(prev)));
     setDirty(true);
-    versionRef.current++;
+    bumpVersion();
   };
 
   const changeLabels = (next: Record<string, LabelValue>) => {
     setLabels(next);
     setDirty(true);
-    versionRef.current++;
+    bumpVersion();
   };
   const withEvents = hasEventSection(schema);
 
@@ -431,20 +439,25 @@ function Workspace({
   /* -------------------------------- saving ------------------------------- */
 
   const saveChain = useRef<Promise<unknown>>(Promise.resolve());
-  /** Saves run one after another, in the order they were requested. */
+  /** Saves run one after another, in the order they were requested. Each one sends the content as it
+   * was when requested, together with that content's version, so a queued save can never mark newer
+   * edits (made while it waited) as saved. */
   const save = (mode: "save" | "complete") => {
+    const snapshot = { version: contentVersion, events, labels };
     const run = saveChain.current.then(
-      () => saveNow(mode),
-      () => saveNow(mode),
+      () => saveNow(mode, snapshot),
+      () => saveNow(mode, snapshot),
     );
     saveChain.current = run.catch(() => {});
     return run;
   };
 
-  const saveNow = async (mode: "save" | "complete") => {
+  const saveNow = async (
+    mode: "save" | "complete",
+    { version, events, labels }: { version: number; events: AnnotationEvent[]; labels: Record<string, LabelValue> },
+  ) => {
     const key = activeKeyRef.current;
     if (!key || loadedKey !== key) return null;
-    const version = versionRef.current;
     // Plain saves with nothing new are skipped (autosave may fire after an explicit save).
     if (mode === "save" && version === savedVersionRef.current) return null;
     // Status from the latest saved copy, never a stale render: a queued autosave must not demote
@@ -505,7 +518,7 @@ function Workspace({
     setDirty(false);
     baseRef.current = baseOf(key, data);
     // Nothing left to save: an autosave queued for the replaced content must not write it back.
-    versionRef.current++;
+    bumpVersion();
     savedVersionRef.current = versionRef.current;
     pendingSave.register(projectId, null);
   };
@@ -621,19 +634,23 @@ function Workspace({
   });
 
   // Someone else saved (or cleared) the open video and it was re-read: take their copy, unless there
-  // are local edits (saving those will then ask which version to keep).
+  // are local edits, including an event being edited (saving those will then ask which version to
+  // keep; leaving edit mode lets this run again).
   useEffect(() => {
     const base = baseRef.current;
-    if (!ready || !activeKey || annQ.data === undefined || base?.key !== activeKey) return;
-    if ((annQ.data?.revision ?? null) === base.revision || dirty || saveMut.isPending) return;
-    adoptRef.current(activeKey, annQ.data);
+    const data = annQ.data;
+    if (!ready || !activeKey || data === undefined || base?.key !== activeKey) return;
+    if ((data?.revision ?? null) === base.revision || dirty || editingId || saveMut.isPending) return;
+    // A read that started before this tab's own latest save can finish after it: never go back in time.
+    if (data && base.savedAt && new Date(data.updated_at).getTime() < new Date(base.savedAt).getTime()) return;
+    adoptRef.current(activeKey, data);
     toast.info(
-      annQ.data
-        ? `Updated with ${annQ.data.updated_by ?? "someone else"}'s latest save`
+      data
+        ? `Updated with ${data.updated_by ?? "someone else"}'s latest save`
         : "Someone cleared this video's annotations",
       { duration: 4000 },
     );
-  }, [annQ.data, activeKey, ready, dirty, saveMut.isPending]);
+  }, [annQ.data, activeKey, ready, dirty, editingId, saveMut.isPending]);
 
   // The heartbeat says the open video changed on the server: re-read it (the effect above applies it).
   useEffect(() => {
@@ -800,15 +817,32 @@ function Workspace({
       throw new Error("save in progress");
     }
     await qc.cancelQueries({ queryKey: keys.annotation(projectId, video.key) });
+    // The saved version this user has seen: the copy on screen for the open video; otherwise this tab's
+    // own copy if it is newer than the latest heartbeat (e.g. saved here a moment ago), else the
+    // heartbeat. The server refuses if someone saved a newer one in the meantime.
+    const base = baseRef.current;
+    const ownCopy = qc.getQueryData<VideoAnnotation | null>(keys.annotation(projectId, video.key));
+    const ownIsNewer = ownCopy && (!activity || new Date(ownCopy.updated_at) >= new Date(activity.as_of));
+    const seen =
+      video.key === activeKeyRef.current && base?.key === video.key
+        ? base.revision
+        : ownIsNewer
+          ? ownCopy.revision
+          : activity
+            ? (activity.videos[video.key]?.revision ?? null)
+            : undefined;
     let movedTo: string | null = null;
-    if (video.status !== "not_started" || video.event_count > 0) {
-      try {
-        movedTo = (await api.clearAnnotation(projectId, video.key)).moved_to;
-      } catch (err) {
-        const { title, hint } = errorMessage(err);
-        toast.error(`Couldn't clear annotations: ${title}`, { description: hint ?? undefined });
-        throw err;
+    try {
+      // Always asked: the queue's status may be a few seconds old.
+      movedTo = (await api.clearAnnotation(projectId, video.key, seen)).moved_to;
+    } catch (err) {
+      const { title, hint } = errorMessage(err);
+      toast.error(`Couldn't clear annotations: ${title}`, { description: hint ?? undefined });
+      if (err instanceof ApiError && err.code === "CLEAR_CONFLICT") {
+        qc.invalidateQueries({ queryKey: keys.annotation(projectId, video.key) });
+        qc.invalidateQueries({ queryKey: ["projects", projectId, "activity"] });
       }
+      throw err;
     }
     qc.setQueryData(keys.annotation(projectId, video.key), null);
     qc.removeQueries({ queryKey: keys.details(projectId, video.key) });
@@ -837,7 +871,7 @@ function Workspace({
       setPreEditDraft(null);
       // New version so an in-flight save can't restore the old events, but nothing left to save:
       // a later Save must not write an empty "in progress" file for the video just cleared.
-      versionRef.current++;
+      bumpVersion();
       savedVersionRef.current = versionRef.current;
     }
     toast.success(`Cleared annotations for ${video.filename}`, {

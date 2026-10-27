@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 
+import { pendingSave } from "./pending-save";
 import { accessToken, supabase } from "./supabase";
 import type {
   ActivityResult,
@@ -44,11 +45,29 @@ export class ApiError extends Error {
 function endSession(message: string) {
   const sb = supabase();
   if (!sb) return;
-  toast.error(message, { id: "session-ended" });
+  toast.error(message, {
+    id: "session-ended",
+    description: pendingSave.hasPending()
+      ? "Your most recent changes could not be saved. Sign in again and redo them."
+      : undefined,
+    duration: 10_000,
+  });
   void sb.auth.signOut();
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** A 401 usually means the access token just expired: get a fresh one (true if that worked). */
+async function refreshSignIn(): Promise<boolean> {
+  const sb = supabase();
+  if (!sb) return false;
+  try {
+    const { data, error } = await sb.auth.refreshSession();
+    return !error && Boolean(data.session);
+  } catch {
+    return false;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const token = await accessToken();
   let res: Response;
   try {
@@ -80,6 +99,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     body as { error?: { code?: string; message?: string; hint?: string; details?: Record<string, unknown> } }
   )?.error;
   if (err?.message) {
+    // Retry once with a refreshed token before giving up on the session (unsaved edits are then kept).
+    if (res.status === 401 && !retried && (await refreshSignIn())) return request<T>(path, init, true);
     if (res.status === 401 || err.code === "AUTH_FORBIDDEN") endSession(err.message);
     throw new ApiError(err.message, res.status, err.code, err.hint ?? null, err.details ?? {});
   }
@@ -117,8 +138,12 @@ export const api = {
   syncStorage: (id: string) => request<VideoList>(`/api/projects/${id}/sync`, { method: "POST" }),
   streamUrl: (id: string, key: string) => request<StreamUrl>(`/api/projects/${id}/videos/stream-url?${q(key)}`),
   videoDetails: (id: string, key: string) => request<VideoDetails>(`/api/projects/${id}/videos/details?${q(key)}`),
-  clearAnnotation: (id: string, key: string) =>
-    request<ClearResult>(`/api/projects/${id}/annotations?${q(key)}`, { method: "DELETE" }),
+  /** `revision`: the saved version the user saw (null: nothing saved; undefined: unknown, no check). */
+  clearAnnotation: (id: string, key: string, revision?: string | null) =>
+    request<ClearResult>(
+      `/api/projects/${id}/annotations?${q(key)}${revision === undefined ? "" : `&revision=${encodeURIComponent(revision ?? "")}`}`,
+      { method: "DELETE" },
+    ),
   getAnnotation: (id: string, key: string) =>
     request<VideoAnnotation | null>(`/api/projects/${id}/annotations?${q(key)}`),
   saveAnnotation: (id: string, key: string, body: AnnotationSave) =>

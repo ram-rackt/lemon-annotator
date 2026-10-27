@@ -28,4 +28,12 @@ export const pendingSave = {
   async flush(projectId: string) {
     if (current?.projectId === projectId) await current.save();
   },
+  /** True while some edits haven't been written yet. */
+  hasPending() {
+    return current !== null;
+  },
+  /** Save pending edits in any project (used before signing out). */
+  async flushAll() {
+    if (current) await current.save();
+  },
 };

@@ -28,8 +28,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { UserAvatar } from "@/components/user-avatar";
 import { copyText } from "@/lib/clipboard";
-import { formatBytes, formatRelative, initials, joinNames } from "@/lib/format";
+import { formatBytes, formatRelative, joinNames } from "@/lib/format";
 import type { PresenceEntry, VideoItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -258,12 +259,12 @@ export function VideoQueue({
                       aria-label={`${joinNames(here.map((p) => p.name))} on this video`}
                     >
                       {here.slice(0, 3).map((p) => (
-                        <span
+                        <UserAvatar
                           key={p.user_id}
-                          className="grid size-5 place-items-center rounded-full bg-sky-500 text-[9px] font-semibold text-white ring-2 ring-background"
-                        >
-                          {initials(p.name)}
-                        </span>
+                          name={p.name}
+                          seed={p.user_id}
+                          className="size-5 text-[9px] ring-2 ring-background"
+                        />
                       ))}
                     </span>
                   )}

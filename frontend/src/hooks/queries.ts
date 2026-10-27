@@ -106,6 +106,8 @@ export function useAnnotation(id: string, key: string | null) {
 }
 
 const ACTIVITY_INTERVAL_MS = 15_000;
+/** Longest a save may take between taking its timestamp and being written. */
+const SAVE_WINDOW_MS = 10_000;
 
 /**
  * Bring other people's saves into the queue. Items saved after the snapshot (e.g. by this tab while
@@ -113,7 +115,9 @@ const ACTIVITY_INTERVAL_MS = 15_000;
  */
 function mergeActivity(qc: QueryClient, id: string, activity: ActivityResult) {
   const asOf = new Date(activity.as_of).getTime();
-  const newerThanSnapshot = (iso: string | null) => iso != null && new Date(iso).getTime() > asOf;
+  // A save's time is taken just before it is written, so one finishing as the snapshot is taken can be
+  // missing from it although its time is earlier. Recent local updates wait for the next heartbeat.
+  const newerThanSnapshot = (iso: string | null) => iso != null && new Date(iso).getTime() > asOf - SAVE_WINDOW_MS;
   qc.setQueryData<VideoList>(keys.videos(id), (prev) => {
     if (!prev) return prev;
     let changed = false;
@@ -175,8 +179,13 @@ export function useActivity(id: string, videoKey: string | null) {
 export function useSaveAnnotation(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ key, body }: { key: string; body: AnnotationSave }) => api.saveAnnotation(id, key, body),
+    mutationFn: async ({ key, body }: { key: string; body: AnnotationSave }) => {
+      // A read already in flight would land after the save and put the older copy back in the cache.
+      await qc.cancelQueries({ queryKey: keys.annotation(id, key) });
+      return api.saveAnnotation(id, key, body);
+    },
     onSuccess: (saved: VideoAnnotation, { key }) => {
+      void qc.cancelQueries({ queryKey: keys.annotation(id, key) });
       qc.setQueryData(keys.annotation(id, key), saved);
       qc.removeQueries({ queryKey: keys.details(id, key) });
       qc.setQueryData<VideoList>(keys.videos(id), (prev) =>

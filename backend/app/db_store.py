@@ -122,6 +122,12 @@ CREATE TABLE IF NOT EXISTS exports (
 """
 
 
+INSERT_ANNOTATION = (
+    "INSERT INTO {p}annotations (bucket, status, event_count, revision, data, updated_at, updated_by, "
+    "project_id, video_key) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+)
+
+
 # --------------------------------------------------------------------------- #
 # Connections: one small adapter per engine, so the store's SQL is written once
 # --------------------------------------------------------------------------- #
@@ -317,11 +323,6 @@ class DatabaseStore:
                 hint=str(exc.errors()[0].get("msg")) if exc.errors() else None,
             ) from exc
 
-    def project_exists(self, project_id: str) -> bool:
-        """True if the id is taken, including by a deleted project."""
-        with self.db.transaction() as tx:
-            return tx.execute("SELECT 1 FROM {p}projects WHERE id = %s", (project_id,)).fetchone() is not None
-
     def insert_project(self, project: Project) -> bool:
         """Add a project as-is (keeps its id and dates). False if the id is already taken."""
         with self.db.transaction() as tx:
@@ -413,24 +414,12 @@ class DatabaseStore:
         is atomic compare-and-set: it only happens if the saved row is still at that revision."""
         if not annotation.video_key:
             raise ValidationError("video_key is required")
-        data = self.db.json(annotation.model_dump(mode="json"))
-        values = (
-            annotation.bucket,
-            annotation.status,
-            len(annotation.events),
-            annotation.revision,
-            data,
-            annotation.updated_at,
-            annotation.updated_by,
-        )
+        values = self._annotation_values(annotation)
         update = (
             "UPDATE {p}annotations SET bucket = %s, status = %s, event_count = %s, revision = %s, data = %s, "
             "updated_at = %s, updated_by = %s WHERE project_id = %s AND video_key = %s AND deleted_at IS NULL"
         )
-        insert = (
-            "INSERT INTO {p}annotations (bucket, status, event_count, revision, data, updated_at, updated_by, "
-            "project_id, video_key) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-        )
+        insert = INSERT_ANNOTATION
         where = (project_id, annotation.video_key)
         try:
             with self.db.transaction() as tx:
@@ -445,6 +434,33 @@ class DatabaseStore:
         except self.db.unique_violation as exc:
             raise revision_conflict() from exc
         return annotation
+
+    def _annotation_values(self, annotation: VideoAnnotation) -> tuple:
+        """Column values in INSERT_ANNOTATION order (without project_id and video_key)."""
+        return (
+            annotation.bucket,
+            annotation.status,
+            len(annotation.events),
+            annotation.revision,
+            self.db.json(annotation.model_dump(mode="json")),
+            annotation.updated_at,
+            annotation.updated_by,
+        )
+
+    def import_project(self, project: Project, annotations: list[VideoAnnotation]) -> bool:
+        """Copy a project and all its annotations in one transaction: all of it or nothing, so an
+        interrupted copy can simply be run again. False if the id is already taken."""
+        with self.db.transaction() as tx:
+            cur = tx.execute(
+                "INSERT INTO {p}projects (id, data, created_at, updated_at) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (id) DO NOTHING",
+                (project.id, self.db.json(project.model_dump(mode="json")), project.created_at, project.updated_at),
+            )
+            if cur.rowcount != 1:
+                return False
+            for annotation in annotations:
+                tx.execute(INSERT_ANNOTATION, self._annotation_values(annotation) + (project.id, annotation.video_key))
+        return True
 
     def load_index(self, project_id: str) -> dict[str, IndexEntry]:
         with self.db.transaction() as tx:

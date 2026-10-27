@@ -332,3 +332,48 @@ def test_tokens_signed_with_supabase_signing_keys(tmp_path, monkeypatch):
         # A legacy HS256 token can't be checked without the secret: a clear server-side message.
         legacy = client.get("/api/projects", headers=bearer(make_token()))
         assert legacy.status_code == 500 and legacy.json()["error"]["code"] == "AUTH_MISCONFIGURED"
+
+
+def test_clearing_refuses_a_version_the_user_has_not_seen(any_client, any_project):
+    seen = _put(any_client, any_project, {"events": [_event()], "base_revision": None}).json()["revision"]
+    newer = _put(any_client, any_project, {"events": [_event(), _event("b", 2)], "base_revision": seen}).json()
+
+    stale = any_client.delete(f"/api/projects/{any_project}/annotations", params={"key": KEY, "revision": seen})
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "CLEAR_CONFLICT"
+    assert any_client.get(f"/api/projects/{any_project}/annotations", params={"key": KEY}).json()["event_count"] == 2
+
+    # "I saw nothing saved" ('') is refused too once something is.
+    blind = any_client.delete(f"/api/projects/{any_project}/annotations", params={"key": KEY, "revision": ""})
+    assert blind.status_code == 409
+
+    ok = any_client.delete(f"/api/projects/{any_project}/annotations", params={"key": KEY, "revision": newer["revision"]})
+    assert ok.status_code == 200 and ok.json()["cleared"] is True
+    # Nothing saved any more: nothing to protect, so any revision is fine (and nothing is cleared).
+    again = any_client.delete(f"/api/projects/{any_project}/annotations", params={"key": KEY, "revision": seen})
+    assert again.status_code == 200 and again.json()["cleared"] is False
+
+
+def test_an_interrupted_migration_leaves_nothing_and_can_be_rerun(client, project, tmp_path, monkeypatch):
+    for key in ("clips/rally_001.mp4", "clips/serve_003.mov"):
+        _put(client, project, {"events": [_event()]}, key=key)
+    files = ProjectStore(tmp_path / "app_data")
+    db = DatabaseStore(f"sqlite:///{tmp_path / 'interrupted.db'}")
+    try:
+        real = db._annotation_values
+        calls = {"n": 0}
+
+        def fail_on_second(annotation):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("connection dropped")
+            return real(annotation)
+
+        monkeypatch.setattr(db, "_annotation_values", fail_on_second)
+        with pytest.raises(RuntimeError):
+            migrate(files, db, log=lambda *_: None)
+        assert db.list_projects() == []  # rolled back: no half-copied project
+
+        monkeypatch.setattr(db, "_annotation_values", real)
+        assert migrate(files, db, log=lambda *_: None) == (1, 2)
+    finally:
+        db.close()

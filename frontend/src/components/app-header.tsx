@@ -2,6 +2,7 @@ import { Citrus } from "lucide-react";
 import Link from "next/link";
 
 import { UserMenu } from "@/components/auth/user-menu";
+import { ProjectSearch, ProjectSearchButton } from "@/components/project-search";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +31,8 @@ export function AppHeader({ children, actions }: { children?: React.ReactNode; a
         </>
       )}
       <div className={cn("flex items-center gap-2.5", !children && "ml-auto")}>
+        <ProjectSearch className="hidden w-48 lg:block xl:w-72" />
+        <ProjectSearchButton className="lg:hidden" />
         {actions}
         <ThemeToggle />
         <UserMenu />

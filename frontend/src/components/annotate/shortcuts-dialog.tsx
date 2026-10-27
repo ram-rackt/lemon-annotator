@@ -38,6 +38,7 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
       [["Ctrl", "Enter"], "Save & Next"],
       [["Alt", "↓"], "Next video"],
       [["Alt", "↑"], "Previous video"],
+      [["Ctrl", "K"], "Search projects"],
       [["Q"], "Show / hide queue"],
       [["T"], "Show / hide tag panel"],
       [["?"], "Show shortcuts"],

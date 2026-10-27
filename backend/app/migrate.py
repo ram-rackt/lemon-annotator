@@ -22,13 +22,11 @@ def migrate(files: ProjectStore, db: DatabaseStore, log=print) -> tuple[int, int
     """Returns (projects copied, annotations copied)."""
     projects = annotations = 0
     for project in files.list_projects():
-        if db.project_exists(project.id):
+        stored, warnings = files.iter_annotations(project.id)
+        # One transaction per project: an interrupted copy leaves nothing behind and is redone next run.
+        if not db.import_project(project, stored):
             log(f"skip  {project.id}  (already in the database)")
             continue
-        db.insert_project(project)
-        stored, warnings = files.iter_annotations(project.id)
-        for annotation in stored:
-            db.save_annotation(project.id, annotation, expected_revision=None)
         for warning in warnings:
             log(f"      warning: {warning}")
         projects += 1

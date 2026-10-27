@@ -186,6 +186,9 @@ def video_details(project_id: str, key: str = Query(..., min_length=1), store: S
 def clear_annotation(
     project_id: str,
     key: str = Query(..., min_length=1),
+    revision: str | None = Query(
+        None, description="Revision the client saw ('' = nothing saved). If it changed meanwhile, nothing is cleared."
+    ),
     user: User = Depends(current_user),
     store: Store = Depends(get_store),
 ):
@@ -194,7 +197,22 @@ def clear_annotation(
     project = store.get(project_id)
     # Clearing only touches stored annotations, so keys outside the current folder are fine.
     require_video_key(project, key, inside_prefix=False)
-    moved = store.clear_annotation(project_id, key, by=user.name)
+    with store.lock(project_id):
+        if revision is not None:
+            try:
+                current = store.get_annotation(project_id, key)
+            except StorageError:
+                current = None  # unreadable: clearing it is exactly what's wanted
+            # Nothing saved now: nothing to protect. Saved, but not the version the client saw: refuse.
+            if current is not None and current.revision != revision:
+                who = current.updated_by or "Someone else"
+                raise ConflictError(
+                    f"{who} saved this video after you last saw it, so nothing was cleared.",
+                    code="CLEAR_CONFLICT",
+                    hint="Open the video to see the latest version, then clear it again if you still want to.",
+                    details={"revision": current.revision, "updated_by": current.updated_by},
+                )
+        moved = store.clear_annotation(project_id, key, by=user.name)
     return ClearResult(key=key, cleared=moved is not None, moved_to=str(moved) if moved else None)
 
 

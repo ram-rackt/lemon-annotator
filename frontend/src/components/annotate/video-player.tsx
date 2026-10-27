@@ -166,6 +166,9 @@ export function VideoPlayer({
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     video.addEventListener("ended", onPause);
+    // A new src (next video, or a refreshed presigned URL) stops playback without firing "pause";
+    // the media element signals it with "emptied". A refresh resumes from resumeRef, captured before this.
+    video.addEventListener("emptied", onPause);
     video.addEventListener("seeked", sync);
     video.addEventListener("timeupdate", sync);
     video.addEventListener("loadedmetadata", onMeta);
@@ -182,6 +185,7 @@ export function VideoPlayer({
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("ended", onPause);
+      video.removeEventListener("emptied", onPause);
       video.removeEventListener("seeked", sync);
       video.removeEventListener("timeupdate", sync);
       video.removeEventListener("loadedmetadata", onMeta);

@@ -4,6 +4,7 @@ import { keepPreviousData, type QueryClient, useMutation, useQuery, useQueryClie
 
 import { useSignedIn } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
+import { isFlagged, reviewField } from "@/lib/schema";
 import type {
   ActivityResult,
   AnnotationSave,
@@ -128,10 +129,6 @@ const ACTIVITY_INTERVAL_MS = 15_000;
 /** Longest a save may take between taking its timestamp and being written. */
 const SAVE_WINDOW_MS = 10_000;
 
-/**
- * Videos marked for coach review. Only requested once a review field is chosen in Settings. `live`
- * (the Coach review page) also picks up other people's flags while it is open.
- */
 /** Every project's flagged videos. `live` (the dashboard's Coach review tab) keeps it up to date while open. */
 export function useReviewAll({ live = false }: { live?: boolean } = {}) {
   return useQuery({
@@ -144,6 +141,10 @@ export function useReviewAll({ live = false }: { live?: boolean } = {}) {
   });
 }
 
+/**
+ * One project's videos marked for coach review. Only requested once the project has a review field.
+ * `live` (the Coach review page) also picks up other people's flags while it is open.
+ */
 export function useReview(id: string, { enabled = true, live = false }: { enabled?: boolean; live?: boolean } = {}) {
   const signedIn = useSignedIn();
   return useQuery({
@@ -245,6 +246,24 @@ function applySavedToQueue(qc: QueryClient, id: string, key: string, saved: Vide
   );
 }
 
+/**
+ * Can this save change a coach review list? Only when the video is flagged before or after it. Most
+ * saves aren't, and re-reading the lists reads every annotation in the project, so autosave skips it.
+ */
+function affectsReview(
+  qc: QueryClient,
+  id: string,
+  before: VideoAnnotation | null | undefined,
+  saved: VideoAnnotation,
+) {
+  const project = qc.getQueryData<Project>(keys.project(id));
+  const field = project && reviewField(project.label_schema, project.settings.coach_review_field);
+  if (!project) return true; // unknown: refresh to be safe
+  if (!field) return false;
+  if (before === undefined) return true; // previous copy not cached
+  return isFlagged(field, before?.labels[field.key]) || isFlagged(field, saved.labels[field.key]);
+}
+
 /** "Done" on the Coach review page: clears the video's flag on the server, so it leaves the list. */
 export function useFinishReview(id: string) {
   const qc = useQueryClient();
@@ -275,9 +294,10 @@ export function useSaveAnnotation(id: string) {
     },
     onSuccess: (saved: VideoAnnotation, { key }) => {
       void qc.cancelQueries({ queryKey: keys.annotation(id, key) });
+      const before = qc.getQueryData<VideoAnnotation | null>(keys.annotation(id, key));
       qc.setQueryData(keys.annotation(id, key), saved);
       qc.removeQueries({ queryKey: keys.details(id, key) });
-      invalidateReview(qc, id);
+      if (affectsReview(qc, id, before, saved)) invalidateReview(qc, id);
       applySavedToQueue(qc, id, key, saved);
       qc.invalidateQueries({ queryKey: keys.projects, exact: true });
     },

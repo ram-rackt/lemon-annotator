@@ -279,6 +279,21 @@ def test_cors_allows_the_configured_site(tmp_path, monkeypatch):
         assert res.status_code == 200 and res.headers["access-control-allow-origin"] == "http://localhost:3000"
 
 
+def test_unexpected_errors_reach_the_browser_without_internals(tmp_path, monkeypatch):
+    with app_client(tmp_path, monkeypatch, auth=True) as client:
+        from app.deps import get_store
+
+        def boom():
+            raise RuntimeError("connection to db.internal:5432 failed")
+
+        monkeypatch.setattr(get_store(), "list_projects", boom)
+        res = client.get("/api/projects", headers={"Origin": "http://localhost:3000", **bearer(make_token())})
+        # Readable cross-origin (else the browser reports a network error), and no internal details.
+        assert res.status_code == 500 and res.headers["access-control-allow-origin"] == "http://localhost:3000"
+        assert res.json()["error"] == {"code": "INTERNAL_ERROR", "message": "Internal server error",
+                                       "hint": "See the API logs for the stack trace.", "details": {}}
+
+
 # --------------------------------------------------------------------------- #
 # Deploy guards
 # --------------------------------------------------------------------------- #

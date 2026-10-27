@@ -67,6 +67,24 @@ async def only_local_hosts(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def unhandled_errors(request: Request, call_next):
+    """Turn an unexpected exception into the usual error JSON. Done here, inside the CORS middleware
+    (added below), so the browser can read the response: an exception handler for Exception would
+    answer from outside it, without CORS headers, and the hosted app would report "network error"."""
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        log.exception("Unhandled error on %s %s", request.method, request.url.path, exc_info=exc)
+        # The exception text may name internals (hosts, SQL); only a local, single-user setup shows it.
+        message = "Internal server error" if get_settings().auth_enabled else str(exc) or "Internal server error"
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "INTERNAL_ERROR", "message": message,
+                               "hint": "See the API logs for the stack trace.", "details": {}}},
+        )
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -100,16 +118,6 @@ async def validation_error_handler(_: Request, exc: RequestValidationError):
                 "details": {"errors": [{"loc": e.get("loc"), "msg": e.get("msg")} for e in errors]},
             }
         },
-    )
-
-
-@app.exception_handler(Exception)
-async def unhandled_error_handler(_: Request, exc: Exception):
-    log.exception("Unhandled error", exc_info=exc)
-    return JSONResponse(
-        status_code=500,
-        content={"error": {"code": "INTERNAL_ERROR", "message": str(exc) or "Internal server error",
-                           "hint": "See the API logs for the stack trace.", "details": {}}},
     )
 
 

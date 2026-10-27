@@ -1,14 +1,15 @@
 "use client";
 
-import { Clapperboard, Settings2 } from "lucide-react";
+import { Clapperboard, Flag, Settings2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 
 import { AppHeader } from "@/components/app-header";
 import { ExportButton } from "@/components/project/export-button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useProject } from "@/hooks/queries";
+import { useProject, useReview } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
+import { reviewField } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
 export function ProjectHeader() {
@@ -17,9 +18,17 @@ export function ProjectHeader() {
   const hydrated = useHydrated();
   const projectQ = useProject(projectId);
   const project = hydrated ? projectQ.data : undefined; // match the server HTML during hydration
+  const reviewEnabled = Boolean(project && reviewField(project.label_schema, project.settings.coach_review_field));
+  const reviewCount = useReview(projectId, { enabled: reviewEnabled }).data?.videos.length;
 
   const tabs = [
     { href: `/projects/${projectId}`, label: "Annotate", icon: Clapperboard },
+    {
+      href: `/projects/${projectId}/review`,
+      label: "Coach review",
+      icon: Flag,
+      count: reviewEnabled ? reviewCount : undefined,
+    },
     { href: `/projects/${projectId}/settings`, label: "Settings", icon: Settings2 },
   ];
 
@@ -31,7 +40,7 @@ export function ProjectHeader() {
         <Skeleton className="hidden h-5 w-32 sm:block" />
       )}
       <nav className="flex shrink-0 items-center gap-1 sm:ml-2">
-        {tabs.map(({ href, label, icon: Icon }) => {
+        {tabs.map(({ href, label, icon: Icon, count }) => {
           const active = pathname === href;
           return (
             <Link
@@ -44,6 +53,11 @@ export function ProjectHeader() {
             >
               <Icon className="size-[18px]" />
               <span className="hidden sm:inline">{label}</span>
+              {count != null && count > 0 && (
+                <span className="rounded-md bg-violet-500/15 px-1.5 text-xs font-medium text-violet-700 tabular-nums dark:text-violet-300">
+                  {count}
+                </span>
+              )}
             </Link>
           );
         })}

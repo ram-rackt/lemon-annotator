@@ -230,6 +230,7 @@ def test_every_endpoint_requires_sign_in(auth_client):
 
     ok = auth_client.get("/api/projects", headers=bearer(make_token()))
     assert ok.status_code == 200 and ok.json() == []
+    assert auth_client.get("/api/review").status_code == 401  # outside /api/projects, still signed in only
 
 
 def test_hosted_requests_are_not_limited_to_localhost(auth_client):

@@ -1,9 +1,20 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronUp, CloudOff, ExternalLink, FolderSearch, Keyboard, Settings2, Users } from "lucide-react";
+import {
+  CheckCheck,
+  ChevronDown,
+  ChevronUp,
+  CloudOff,
+  ExternalLink,
+  Flag,
+  FolderSearch,
+  Keyboard,
+  Settings2,
+  Users,
+} from "lucide-react";
 import Link from "next/link";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
@@ -25,6 +36,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useHotkeys } from "@/hooks/use-hotkeys";
 import { useHydrated } from "@/hooks/use-hydrated";
 import {
+  invalidateReview,
   keys,
   streamUrlQuery,
   useActivity,
@@ -48,6 +60,10 @@ import {
   hasEventSection,
   missingRequiredLabels,
   reconcileDraft,
+  clearedValue,
+  formatValue,
+  isFlagged,
+  reviewField,
   setDraftValue,
   toggledValue,
   withLabelDefaults,
@@ -283,6 +299,7 @@ function Workspace({
   initialKey: string | null;
 }) {
   const qc = useQueryClient();
+  const router = useRouter();
   const projectId = project.id;
   const schema = project.label_schema;
   const { fps, skip_seconds: skipSeconds } = project.settings;
@@ -377,6 +394,7 @@ function Workspace({
     bumpVersion();
   };
   const withEvents = hasEventSection(schema);
+  const coachField = reviewField(schema, project.settings.coach_review_field);
 
   /* ------------------------------ switching ------------------------------ */
 
@@ -441,9 +459,12 @@ function Workspace({
   const saveChain = useRef<Promise<unknown>>(Promise.resolve());
   /** Saves run one after another, in the order they were requested. Each one sends the content as it
    * was when requested, together with that content's version, so a queued save can never mark newer
-   * edits (made while it waited) as saved. */
-  const save = (mode: "save" | "complete") => {
-    const snapshot = { version: contentVersion, events, labels };
+   * edits (made while it waited) as saved. `withLabels` saves labels changed in the same event handler:
+   * they aren't rendered yet, so their version is the one just counted. */
+  const save = (mode: "save" | "complete", withLabels?: Record<string, LabelValue>) => {
+    const snapshot = withLabels
+      ? { version: versionRef.current, events, labels: withLabels }
+      : { version: contentVersion, events, labels };
     const run = saveChain.current.then(
       () => saveNow(mode, snapshot),
       () => saveNow(mode, snapshot),
@@ -620,18 +641,68 @@ function Workspace({
     }
   };
 
+  /** Coach review: clear this video's flag (saving any changes made too), then open the next flagged video. */
+  const finishReview = async () => {
+    if (!ready || !coachField) return;
+    const current = activeKeyRef.current;
+    const next = { ...labels, [coachField.key]: clearedValue(coachField) };
+    changeLabels(next);
+    const version = versionRef.current;
+    try {
+      if (!(await save("save", next))) return;
+    } catch {
+      return; // the error (or conflict) toast is already shown
+    }
+    if (activeKeyRef.current !== current || versionRef.current !== version) return;
+    let flagged: string[] = [];
+    try {
+      const list = await qc.fetchQuery({
+        queryKey: keys.review(projectId),
+        queryFn: () => api.reviewVideos(projectId),
+        staleTime: 0,
+      });
+      flagged = list.videos.map((v) => v.key).filter((k) => k !== current && videos.some((v) => v.key === k));
+    } catch {
+      /* the review is saved; just don't move on */
+    }
+    if (activeKeyRef.current !== current) return;
+    if (flagged[0]) {
+      doSwitch(flagged[0]);
+      toast.success("Review done — next flagged video", { duration: 2000 });
+    } else {
+      toast.success("Review done", {
+        description: "No other videos in this project are flagged for review.",
+        action: { label: "Coach review", onClick: () => router.push("/review") },
+      });
+    }
+  };
+
   // Autosave: write changes to disk shortly after the last edit, so work persists until it is
   // cleared on purpose. A ref keeps the timer from restarting on unrelated re-renders.
   const saveRef = useRef(save);
   const flushRef = useRef<() => void>(() => {});
   const adoptRef = useRef(adoptServerCopy);
+  const switchRef = useRef(requestSwitch);
+  const finishReviewRef = useRef(finishReview);
   useEffect(() => {
     saveRef.current = save;
     adoptRef.current = adoptServerCopy;
+    switchRef.current = requestSwitch;
+    finishReviewRef.current = finishReview;
     flushRef.current = () => {
       if (dirty && ready) save("save").catch(() => {});
     };
   });
+
+  // This view stays mounted (hidden) while another tab of the app is open, so opening a video from
+  // there (e.g. Coach review) arrives as a new ?v= rather than a fresh mount. Our own switches set ?v=
+  // to the active video, so they don't trigger this.
+  useEffect(() => {
+    if (initialKey && initialKey !== activeKeyRef.current && videos.some((v) => v.key === initialKey)) {
+      void switchRef.current(initialKey);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the requested video changes
+  }, [initialKey]);
 
   // Someone else saved (or cleared) the open video and it was re-read: take their copy, unless there
   // are local edits, including an event being edited (saving those will then ask which version to
@@ -861,6 +932,7 @@ function Workspace({
         : prev,
     );
     qc.invalidateQueries({ queryKey: keys.projects, exact: true });
+    invalidateReview(qc, projectId);
     if (video.key === activeKeyRef.current) {
       setLabels(withLabelDefaults(schema, undefined));
       setEvents([]);
@@ -1021,6 +1093,7 @@ function Workspace({
   ) : null;
 
   const status = annQ.data?.status ?? "not_started";
+  const forCoach = ready && coachField != null && isFlagged(coachField, labels[coachField.key]);
   const completedCount = videos.filter((v) => v.status === "completed").length;
   const presence = activity?.presence ?? [];
   const othersHere = presence.filter((p) => p.video_key === activeKey);
@@ -1068,6 +1141,32 @@ function Workspace({
                   Completed
                 </Badge>
               )}
+              {forCoach && (
+                <>
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 border-violet-500/40 text-violet-700 dark:text-violet-300"
+                  >
+                    <Flag /> For coach review
+                  </Badge>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className="shrink-0"
+                        onClick={() => void finishReviewRef.current()}
+                      >
+                        <CheckCheck /> Done reviewing
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-64">
+                      Sets “{coachField.label}” to {formatValue(clearedValue(coachField)) || "no answer"}, saves your
+                      changes and opens the next flagged video. It stays in the queue.
+                    </TooltipContent>
+                  </Tooltip>
+                </>
+              )}
               {othersHere.length > 0 && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1085,7 +1184,11 @@ function Workspace({
             </div>
           </div>
           <span
-            className="hidden max-w-[40%] min-w-0 truncate font-mono text-[11px] text-muted-foreground xl:block"
+            className={cn(
+              "hidden max-w-[40%] min-w-0 truncate font-mono text-[11px] text-muted-foreground xl:block",
+              // Room for the filename next to the review badge and button.
+              forCoach && "xl:hidden 2xl:block",
+            )}
             title={`s3://${list.bucket}/${activeKey}`}
           >
             s3://{list.bucket}/{activeKey}

@@ -17,6 +17,9 @@ from ..models import (
     AnnotationSave,
     ClearResult,
     Project,
+    ProjectReview,
+    ReviewList,
+    ReviewVideo,
     SchemaField,
     StreamUrl,
     SyncInfo,
@@ -25,10 +28,14 @@ from ..models import (
     VideoItem,
     VideoList,
     VideoState,
+    cleared_value,
+    is_flagged,
     utcnow,
 )
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["videos"])
+# Coach review across every project (the dashboard's Coach review tab).
+review_router = APIRouter(prefix="/api/review", tags=["review"])
 log = logging.getLogger(__name__)
 
 
@@ -240,6 +247,88 @@ def activity(
         if belongs_to(entry.bucket, project) and key.startswith(project.storage.normalized_prefix)
     }
     return ActivityResult(as_of=as_of, videos=videos, presence=presence.others(project_id, user))
+
+
+@router.get("/review", response_model=ReviewList)
+def review_videos(project_id: str, store: Store = Depends(get_store)):
+    """Videos flagged for coach review (see LabelSchema.review_field). Reads only stored annotations
+    (never S3), from the current bucket and folder like the queue."""
+    return project_review(store.get(project_id), store)
+
+
+@review_router.get("", response_model=list[ProjectReview])
+def review_all(store: Store = Depends(get_store)):
+    """Every project that can flag videos for coach review, with its flagged videos (possibly none)."""
+    out = []
+    for project in store.list_projects():
+        try:
+            review = project_review(project, store)
+        except AppError as exc:  # one unreadable project must not hide the others
+            log.warning("Skipping coach review for %s: %s", project.id, exc.message)
+            continue
+        if review.field:
+            out.append(ProjectReview(project_id=project.id, project_name=project.name, **review.model_dump()))
+    return out
+
+
+def project_review(project: Project, store: Store) -> ReviewList:
+    key = project.settings.coach_review_field
+    field = project.label_schema.review_field(key)
+    if not field:
+        return ReviewList(field_key=key, field=None, videos=[])
+    stored, warnings = store.iter_annotations(project.id)
+    prefix = project.storage.normalized_prefix
+    videos = [
+        ReviewVideo(
+            key=ann.video_key,
+            filename=ann.video_filename,
+            status=ann.status,
+            event_count=len(ann.events),
+            duration_seconds=ann.duration_seconds,
+            annotated_at=ann.updated_at,
+            updated_by=ann.updated_by,
+            labels=ann.labels,
+        )
+        for ann in stored
+        if belongs_to(ann.bucket, project)
+        and ann.video_key.startswith(prefix)
+        and is_flagged(field, ann.labels.get(field.key))
+    ]
+    videos.sort(key=lambda v: v.annotated_at, reverse=True)
+    return ReviewList(field_key=key, field=field, videos=videos, warnings=warnings)
+
+
+@router.post("/review/done", response_model=VideoAnnotation | None)
+def finish_review(
+    project_id: str,
+    key: str = Query(..., min_length=1),
+    user: User = Depends(current_user),
+    store: Store = Depends(get_store),
+):
+    """The coach is done with a flagged video: clear its flag so it leaves the Coach review tab (it stays
+    in the queue). Nothing else changes. Already cleared (e.g. by another coach) is not an error."""
+    project = store.get(project_id)
+    require_video_key(project, key, inside_prefix=False)
+    field = project.label_schema.review_field(project.settings.coach_review_field)
+    if not field:
+        raise ValidationError("Coach review is not set up for this project.", code="REVIEW_NOT_CONFIGURED")
+    with store.lock(project_id):
+        existing = store.get_annotation(project_id, key)
+        if not existing or not is_flagged(field, existing.labels.get(field.key)):
+            return existing
+        done = existing.model_copy(
+            update={
+                "labels": {**existing.labels, field.key: cleared_value(field)},
+                "updated_at": utcnow(),
+                "updated_by": user.name,
+                "revision": secrets.token_hex(8),
+            }
+        )
+        try:
+            return store.save_annotation(project_id, done, expected_revision=existing.revision)
+        except ConflictError as exc:
+            latest = store.get_annotation(project_id, key)
+            raise annotation_conflict(latest, cleared=latest is None) from exc
 
 
 @router.get("/annotations", response_model=VideoAnnotation | None)

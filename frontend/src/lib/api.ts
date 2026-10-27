@@ -9,7 +9,9 @@ import type {
   ConnectionTestResult,
   ExportResult,
   Project,
+  ProjectReview,
   ProjectUpdate,
+  ReviewList,
   StorageUpdate,
   StreamUrl,
   VideoAnnotation,
@@ -151,6 +153,10 @@ export const api = {
       method: "PUT",
       body: json(body),
     }),
+  reviewVideos: (id: string) => request<ReviewList>(`/api/projects/${id}/review`),
+  reviewAll: () => request<ProjectReview[]>("/api/review"),
+  finishReview: (id: string, key: string) =>
+    request<VideoAnnotation | null>(`/api/projects/${id}/review/done?${q(key)}`, { method: "POST" }),
   exportProject: (id: string) => request<ExportResult>(`/api/projects/${id}/export`, { method: "POST" }),
   activity: (id: string, videoKey: string | null) =>
     request<ActivityResult>(`/api/projects/${id}/activity`, { method: "POST", body: json({ video_key: videoKey }) }),

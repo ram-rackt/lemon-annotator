@@ -4,7 +4,16 @@ import { keepPreviousData, type QueryClient, useMutation, useQuery, useQueryClie
 
 import { useSignedIn } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
-import type { ActivityResult, AnnotationSave, Project, ProjectUpdate, VideoAnnotation, VideoList } from "@/lib/types";
+import type {
+  ActivityResult,
+  AnnotationSave,
+  Project,
+  ProjectReview,
+  ProjectUpdate,
+  ReviewList,
+  VideoAnnotation,
+  VideoList,
+} from "@/lib/types";
 
 // Every query waits for useSignedIn(): with sign-in on, nothing is requested until a session is confirmed.
 
@@ -16,7 +25,16 @@ export const keys = {
   annotation: (id: string, key: string) => ["projects", id, "annotation", key] as const,
   details: (id: string, key: string) => ["projects", id, "details", key] as const,
   activity: (id: string, key: string | null) => ["projects", id, "activity", key] as const,
+  review: (id: string) => ["projects", id, "review"] as const,
+  /** Every project's flagged videos (the dashboard's Coach review tab). */
+  reviewAll: ["review"] as const,
 };
+
+/** A video's flag (or a project's review field) may have changed: refresh both review lists. */
+export function invalidateReview(qc: QueryClient, id: string) {
+  qc.invalidateQueries({ queryKey: keys.review(id) });
+  qc.invalidateQueries({ queryKey: keys.reviewAll });
+}
 
 export function useProjects() {
   return useQuery({ queryKey: keys.projects, queryFn: api.listProjects, enabled: useSignedIn() });
@@ -33,6 +51,7 @@ export function useUpdateProject(id: string) {
     onSuccess: (project: Project, body) => {
       qc.setQueryData(keys.project(id), project);
       qc.invalidateQueries({ queryKey: keys.projects, exact: true });
+      invalidateReview(qc, id);
       if (body.storage || body.settings) qc.invalidateQueries({ queryKey: keys.videos(id) });
       if (body.storage) {
         // Presigned URLs and object details were made for the old bucket / credentials.
@@ -110,6 +129,34 @@ const ACTIVITY_INTERVAL_MS = 15_000;
 const SAVE_WINDOW_MS = 10_000;
 
 /**
+ * Videos marked for coach review. Only requested once a review field is chosen in Settings. `live`
+ * (the Coach review page) also picks up other people's flags while it is open.
+ */
+/** Every project's flagged videos. `live` (the dashboard's Coach review tab) keeps it up to date while open. */
+export function useReviewAll({ live = false }: { live?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.reviewAll,
+    queryFn: api.reviewAll,
+    enabled: useSignedIn(),
+    staleTime: live ? 0 : 30_000,
+    refetchInterval: live ? ACTIVITY_INTERVAL_MS : false,
+    refetchOnWindowFocus: live,
+  });
+}
+
+export function useReview(id: string, { enabled = true, live = false }: { enabled?: boolean; live?: boolean } = {}) {
+  const signedIn = useSignedIn();
+  return useQuery({
+    queryKey: keys.review(id),
+    queryFn: () => api.reviewVideos(id),
+    enabled: enabled && signedIn,
+    staleTime: live ? 0 : 30_000,
+    refetchInterval: live ? ACTIVITY_INTERVAL_MS : false,
+    refetchOnWindowFocus: live,
+  });
+}
+
+/**
  * Bring other people's saves into the queue. Items saved after the snapshot (e.g. by this tab while
  * the request was in flight) are left alone.
  */
@@ -176,6 +223,48 @@ export function useActivity(id: string, videoKey: string | null) {
   });
 }
 
+/** Mirror a save made outside the Annotate view's own save path into the queue's row for that video. */
+function applySavedToQueue(qc: QueryClient, id: string, key: string, saved: VideoAnnotation) {
+  qc.setQueryData<VideoList>(keys.videos(id), (prev) =>
+    prev
+      ? {
+          ...prev,
+          videos: prev.videos.map((v) =>
+            v.key === key
+              ? {
+                  ...v,
+                  status: saved.status,
+                  event_count: saved.events.length,
+                  annotated_at: saved.updated_at,
+                  updated_by: saved.updated_by,
+                }
+              : v,
+          ),
+        }
+      : prev,
+  );
+}
+
+/** "Done" on the Coach review page: clears the video's flag on the server, so it leaves the list. */
+export function useFinishReview(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => api.finishReview(id, key),
+    onSuccess: (saved, key) => {
+      const without = <T extends ReviewList>(r: T): T => ({ ...r, videos: r.videos.filter((v) => v.key !== key) });
+      qc.setQueryData<ReviewList>(keys.review(id), (prev) => prev && without(prev));
+      qc.setQueryData<ProjectReview[]>(keys.reviewAll, (prev) =>
+        prev?.map((p) => (p.project_id === id ? without(p) : p)),
+      );
+      invalidateReview(qc, id);
+      // An open Annotate view re-reads it (and takes it over unless it has unsaved edits).
+      qc.invalidateQueries({ queryKey: keys.annotation(id, key) });
+      qc.removeQueries({ queryKey: keys.details(id, key) });
+      if (saved) applySavedToQueue(qc, id, key, saved);
+    },
+  });
+}
+
 export function useSaveAnnotation(id: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -188,24 +277,8 @@ export function useSaveAnnotation(id: string) {
       void qc.cancelQueries({ queryKey: keys.annotation(id, key) });
       qc.setQueryData(keys.annotation(id, key), saved);
       qc.removeQueries({ queryKey: keys.details(id, key) });
-      qc.setQueryData<VideoList>(keys.videos(id), (prev) =>
-        prev
-          ? {
-              ...prev,
-              videos: prev.videos.map((v) =>
-                v.key === key
-                  ? {
-                      ...v,
-                      status: saved.status,
-                      event_count: saved.events.length,
-                      annotated_at: saved.updated_at,
-                      updated_by: saved.updated_by,
-                    }
-                  : v,
-              ),
-            }
-          : prev,
-      );
+      invalidateReview(qc, id);
+      applySavedToQueue(qc, id, key, saved);
       qc.invalidateQueries({ queryKey: keys.projects, exact: true });
     },
   });

@@ -131,3 +131,4 @@ signed_in = [Depends(current_user)]
 app.include_router(projects.router, dependencies=signed_in)
 app.include_router(videos.router, dependencies=signed_in)
 app.include_router(export.router, dependencies=signed_in)
+app.include_router(videos.review_router, dependencies=signed_in)

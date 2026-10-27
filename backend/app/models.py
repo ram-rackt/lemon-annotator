@@ -78,6 +78,47 @@ class LabelSchema(BaseModel):
             raise ValueError("Attribute labels must be unique")
         return self
 
+    def review_field(self, key: str | None) -> SchemaField | None:
+        """The coach-review field: the one `key` names, or (no key set) the first whole-video field with
+        "review" in its key or label. None when there is no such field that can mark a video."""
+        eligible = [f for f in self.fields if can_mark_for_review(f)]
+        if key:
+            return next((f for f in eligible if f.key == key), None)
+        return next((f for f in eligible if "review" in f"{f.key} {f.label}".lower()), None)
+
+
+# --------------------------------------------------------------------------- #
+# Coach review
+# --------------------------------------------------------------------------- #
+
+# Option values that mean "flagged" / "not flagged" in a single-choice or dropdown review field.
+REVIEW_FLAGGED = ("true", "yes")
+REVIEW_CLEARED = ("false", "no")
+
+
+def _option(field: SchemaField, values: tuple[str, ...]) -> str | None:
+    return next((o for o in field.options if o.strip().lower() in values), None)
+
+
+def can_mark_for_review(field: SchemaField) -> bool:
+    """Whole-video checkboxes, and whole-video single choices / dropdowns with a "true" or "yes" option."""
+    if field.scope != "video":
+        return False
+    if field.type == "checkbox":
+        return True
+    return field.type in ("choices", "select") and not field.multiple and _option(field, REVIEW_FLAGGED) is not None
+
+
+def is_flagged(field: SchemaField, value: object) -> bool:
+    if field.type == "checkbox":
+        return value is True
+    return isinstance(value, str) and value.strip().lower() in REVIEW_FLAGGED
+
+
+def cleared_value(field: SchemaField) -> bool | str | None:
+    """What "done reviewing" sets the field to: unticked, or the "false" / "no" option (else no answer)."""
+    return False if field.type == "checkbox" else _option(field, REVIEW_CLEARED)
+
 
 # --------------------------------------------------------------------------- #
 # Project
@@ -168,6 +209,9 @@ class ProjectSettings(BaseModel):
     fps: float = Field(30, gt=0, le=240)
     skip_seconds: float = Field(5, gt=0, le=600)
     url_expiry_seconds: int = Field(3600, ge=300, le=43200)
+    # Key of the whole-video field that flags a video for coach review (the Coach review tab).
+    # None: the first whole-video field with "review" in its name.
+    coach_review_field: str | None = Field(None, max_length=64)
 
 
 class SyncInfo(BaseModel):
@@ -383,6 +427,35 @@ class ExportResult(BaseModel):
     event_count: int
     warnings: list[str]
     data: dict
+
+
+class ReviewVideo(BaseModel):
+    key: str
+    filename: str
+    status: VideoStatus
+    event_count: int
+    duration_seconds: float | None = None
+    annotated_at: datetime
+    updated_by: str | None = None
+    labels: dict[str, bool | str | list[str] | None] = Field(default_factory=dict)
+
+
+class ReviewList(BaseModel):
+    """Videos in the current folder flagged for coach review, most recently saved first."""
+
+    # The chosen key (None: detected automatically), even when it no longer names a usable field.
+    field_key: str | None
+    # The field in use (chosen or detected), None when there is none.
+    field: SchemaField | None
+    videos: list[ReviewVideo]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ProjectReview(ReviewList):
+    """One project's part of the dashboard's Coach review tab."""
+
+    project_id: str
+    project_name: str
 
 
 class ActivityPing(BaseModel):

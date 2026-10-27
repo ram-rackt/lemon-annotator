@@ -7,13 +7,17 @@ import { Field } from "@/components/settings/storage-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useUpdateProject } from "@/hooks/queries";
 import { errorMessage } from "@/lib/api";
+import { reviewField, reviewFieldOptions } from "@/lib/schema";
 import type { Project } from "@/lib/types";
 
 const FPS_PRESETS = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60, 120];
+// Select items can't have an empty value. Saved as null: the field is found by its name.
+const AUTO_REVIEW_FIELD = "__auto__";
 
 function fromProject(p: Project) {
   return {
@@ -22,6 +26,7 @@ function fromProject(p: Project) {
     fps: String(p.settings.fps),
     skip_seconds: String(p.settings.skip_seconds),
     url_expiry_minutes: String(Math.round(p.settings.url_expiry_seconds / 60)),
+    coach_review_field: p.settings.coach_review_field ?? AUTO_REVIEW_FIELD,
   };
 }
 
@@ -46,6 +51,7 @@ export function GeneralSettings({ project }: { project: Project }) {
           fps,
           skip_seconds: skip,
           url_expiry_seconds: Math.round(expiry * 60),
+          coach_review_field: form.coach_review_field === AUTO_REVIEW_FIELD ? null : form.coach_review_field,
         },
       },
       {
@@ -63,6 +69,11 @@ export function GeneralSettings({ project }: { project: Project }) {
     );
 
   const set = (patch: Partial<typeof form>) => setForm((f) => ({ ...f, ...patch }));
+  const reviewOptions = reviewFieldOptions(project.label_schema);
+  const detected = reviewField(project.label_schema, null);
+  // Saved, but since removed from the schema (or changed type): shown so it can be replaced.
+  const staleReviewField =
+    form.coach_review_field !== AUTO_REVIEW_FIELD && !reviewOptions.some((f) => f.key === form.coach_review_field);
 
   return (
     <Card>
@@ -122,6 +133,43 @@ export function GeneralSettings({ project }: { project: Project }) {
             aria-invalid={!(expiry >= 5 && expiry <= 720)}
           />
         </Field>
+        <div className="sm:col-span-2">
+          <Field
+            label="Coach review field"
+            htmlFor="coach-review-field"
+            hint={
+              reviewOptions.length === 0
+                ? "Add a whole-video field such as “Flagged for Review” (true / false, or a checkbox) in Label schema first."
+                : "Videos with this field set to true (or ticked) are listed in the Coach review tab until a coach marks them done."
+            }
+          >
+            <Select
+              value={form.coach_review_field}
+              onValueChange={(v) => set({ coach_review_field: v })}
+              disabled={reviewOptions.length === 0 && !staleReviewField}
+              aria-label="Coach review field"
+            >
+              <SelectTrigger id="coach-review-field" className="w-full sm:w-80">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={AUTO_REVIEW_FIELD}>
+                  {detected ? `Automatic (${detected.label})` : "Automatic (a field with “review” in its name)"}
+                </SelectItem>
+                {reviewOptions.map((f) => (
+                  <SelectItem key={f.key} value={f.key}>
+                    {f.label}
+                  </SelectItem>
+                ))}
+                {staleReviewField && (
+                  <SelectItem value={form.coach_review_field} disabled>
+                    {form.coach_review_field} (no longer in the schema)
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
         <p className="text-xs text-muted-foreground sm:col-span-2">
           The queue includes every <code className="font-mono">.mp4</code> and <code className="font-mono">.mov</code>{" "}
           file under the folder prefix, including sub-folders.

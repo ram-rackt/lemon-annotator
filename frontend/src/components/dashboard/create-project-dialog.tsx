@@ -34,6 +34,7 @@ export function CreateProjectDialog({ trigger }: { trigger?: React.ReactNode }) 
     mutationFn: () => api.createProject({ name: name.trim(), description: description.trim() }),
     onSuccess: (project) => {
       qc.invalidateQueries({ queryKey: keys.projects });
+      qc.invalidateQueries({ queryKey: keys.reviewAll });
       toast.success(`Created “${project.name}”`, { description: "Connect your S3 bucket to get started." });
       setOpen(false);
       setName("");

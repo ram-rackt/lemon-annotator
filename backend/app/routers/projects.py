@@ -4,7 +4,7 @@ from .. import s3_service
 from ..auth import User, current_user
 from ..config import get_settings
 from ..deps import Store, get_store, to_public
-from ..errors import ConflictError
+from ..errors import ConflictError, ValidationError
 from ..models import (
     ConnectionTestResult,
     ProjectCreate,
@@ -59,6 +59,16 @@ def update_project(project_id: str, body: ProjectUpdate, store: Store = Depends(
         if body.label_schema is not None:
             project.label_schema = body.label_schema
         if body.settings is not None:
+            # Checked only when it changes, so a field removed from the schema later never blocks saving
+            # other settings (the Coach review tab explains that it needs a new field instead).
+            review_key = body.settings.coach_review_field
+            if review_key and review_key != project.settings.coach_review_field:
+                if not project.label_schema.review_field(review_key):
+                    raise ValidationError(
+                        "The coach review field must be a whole-video checkbox, or a whole-video choice "
+                        'with a "true" or "yes" option.',
+                        code="INVALID_REVIEW_FIELD",
+                    )
             project.settings = body.settings
         store.save(project)
     return to_public(project, store)

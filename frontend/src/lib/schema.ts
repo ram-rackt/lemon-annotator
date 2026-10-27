@@ -36,6 +36,38 @@ export const SAMPLE_SCHEMA: LabelSchema = {
 export const videoFields = (schema: LabelSchema) => schema.fields.filter((f) => f.scope === "video");
 export const eventFields = (schema: LabelSchema) => schema.fields.filter((f) => f.scope !== "video");
 
+/* ------------------------------------------------------------- coach review (same rules as the API) -- */
+
+const REVIEW_FLAGGED = ["true", "yes"];
+const REVIEW_CLEARED = ["false", "no"];
+const findOption = (f: SchemaField, values: string[]) => f.options.find((o) => values.includes(o.trim().toLowerCase()));
+
+/** Whole-video checkboxes, and whole-video single choices / dropdowns with a "true" or "yes" option. */
+export const reviewFieldOptions = (schema: LabelSchema) =>
+  schema.fields.filter(
+    (f) =>
+      f.scope === "video" &&
+      (f.type === "checkbox" ||
+        ((f.type === "choices" || f.type === "select") && !f.multiple && findOption(f, REVIEW_FLAGGED) != null)),
+  );
+
+/** The field that flags videos for coach review: the chosen one (`key`), or with none chosen the first
+ * whole-video field with "review" in its name. Undefined when there is none. */
+export function reviewField(schema: LabelSchema, key: string | null): SchemaField | undefined {
+  const options = reviewFieldOptions(schema);
+  if (key) return options.find((f) => f.key === key);
+  return options.find((f) => `${f.key} ${f.label}`.toLowerCase().includes("review"));
+}
+
+export const isFlagged = (f: SchemaField, value: LabelValue | undefined) =>
+  f.type === "checkbox"
+    ? value === true
+    : typeof value === "string" && REVIEW_FLAGGED.includes(value.trim().toLowerCase());
+
+/** What "Done reviewing" sets the field to: unticked, or the "false" / "no" option (else no answer). */
+export const clearedValue = (f: SchemaField): LabelValue =>
+  f.type === "checkbox" ? false : (findOption(f, REVIEW_CLEARED) ?? null);
+
 /** Does this schema record per-timestamp events? Yes when it has event types or per-timestamp
  * fields, and also when it has no whole-video fields at all (plain timestamp marking). */
 export const hasEventSection = (schema: LabelSchema) =>

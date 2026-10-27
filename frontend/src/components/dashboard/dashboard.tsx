@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { AppHeader } from "@/components/app-header";
 import { CreateProjectDialog } from "@/components/dashboard/create-project-dialog";
+import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { ErrorState } from "@/components/error-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,7 +27,9 @@ export function Dashboard() {
 
   return (
     <div className="flex min-h-svh flex-col">
-      <AppHeader />
+      <AppHeader>
+        <DashboardNav />
+      </AppHeader>
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-10 sm:px-6">
         <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
           <div>

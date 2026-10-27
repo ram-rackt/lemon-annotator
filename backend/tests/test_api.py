@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from conftest import create_project
+
 
 def test_project_lifecycle(client):
     created = client.post("/api/projects", json={"name": "Tennis  Q3", "description": "rallies"})
@@ -261,3 +263,102 @@ def test_whole_video_labels(client, project):
     exported = client.post(f"/api/projects/{project}/export").json()["data"]
     video = next(v for v in exported["videos"] if v["s3_key"] == "clips/rally_001.mp4")
     assert video["labels"] == {"shot_type": "lift", "flag": False}
+
+
+
+REVIEW_SCHEMA = {"event_types": [], "fields": [
+    {"key": "rotation", "label": "Video Rotation", "type": "choices", "options": ["0", "90"], "scope": "video"},
+    {"key": "flagged_for_review", "label": "Flagged for Review", "type": "choices", "options": ["true", "false"],
+     "scope": "video"},
+    {"key": "unforced", "label": "Unforced error", "type": "checkbox", "scope": "video"},
+    {"key": "forehand", "label": "Forehand", "type": "checkbox"},  # per timestamp: can't flag a video
+]}
+
+
+def _label(client, project, key, **labels):
+    res = client.put(f"/api/projects/{project}/annotations", params={"key": key}, json={"labels": labels, "events": []})
+    assert res.status_code == 200, res.text
+
+
+def test_coach_review_flow(any_client, any_project):
+    client, project = any_client, any_project
+    client.patch(f"/api/projects/{project}", json={"label_schema": REVIEW_SCHEMA})
+    review = lambda: client.get(f"/api/projects/{project}/review").json()  # noqa: E731
+
+    # Nothing chosen in Settings: the "Flagged for Review" field is picked up by its name.
+    assert review()["field_key"] is None and review()["field"]["key"] == "flagged_for_review"
+    _label(client, project, "clips/rally_001.mp4", flagged_for_review="true", rotation="90")
+    _label(client, project, "clips/serve_003.mov", flagged_for_review="false")
+    _label(client, project, "clips/set2/RALLY_002.MP4", flagged_for_review="true")
+
+    listed = review()["videos"]
+    # Most recently saved first, with the whole-video answers for the coach.
+    assert [v["key"] for v in listed] == ["clips/set2/RALLY_002.MP4", "clips/rally_001.mp4"]
+    assert listed[1]["labels"] == {"rotation": "90", "flagged_for_review": "true", "unforced": False}
+
+    # The coach is done: the flag is cleared, nothing else changes, and the video stays in the queue.
+    done = client.post(f"/api/projects/{project}/review/done", params={"key": "clips/rally_001.mp4"}).json()
+    assert done["labels"] == {"rotation": "90", "flagged_for_review": "false", "unforced": False}
+    assert [v["key"] for v in review()["videos"]] == ["clips/set2/RALLY_002.MP4"]
+    queue = {v["key"]: v for v in client.get(f"/api/projects/{project}/videos").json()["videos"]}
+    assert queue["clips/rally_001.mp4"]["status"] == "in_progress"
+    # Done twice (e.g. two coaches) is fine and changes nothing.
+    again = client.post(f"/api/projects/{project}/review/done", params={"key": "clips/rally_001.mp4"}).json()
+    assert again["revision"] == done["revision"]
+
+    # Flagging again brings it back; clearing the annotations takes it off.
+    _label(client, project, "clips/rally_001.mp4", flagged_for_review="true")
+    client.delete(f"/api/projects/{project}/annotations", params={"key": "clips/set2/RALLY_002.MP4"})
+    assert [v["key"] for v in review()["videos"]] == ["clips/rally_001.mp4"]
+
+    # Like the queue, only the current folder counts.
+    client.patch(f"/api/projects/{project}", json={"storage": {"prefix": "clips/set2/"}})
+    assert review()["videos"] == []
+
+
+def test_coach_review_with_a_chosen_checkbox(any_client, any_project):
+    client, project = any_client, any_project
+    client.patch(f"/api/projects/{project}", json={"label_schema": REVIEW_SCHEMA})
+    for key in ("rotation", "forehand", "nope"):  # no "true"/"yes" option, per timestamp, not in the schema
+        res = client.patch(f"/api/projects/{project}", json={"settings": {"coach_review_field": key}})
+        assert res.status_code == 400 and res.json()["error"]["code"] == "INVALID_REVIEW_FIELD", key
+    assert client.patch(f"/api/projects/{project}", json={"settings": {"coach_review_field": "unforced"}}).status_code == 200
+
+    _label(client, project, "clips/rally_001.mp4", unforced=True, flagged_for_review="true")
+    _label(client, project, "clips/serve_003.mov", flagged_for_review="true")
+    assert [v["key"] for v in client.get(f"/api/projects/{project}/review").json()["videos"]] == ["clips/rally_001.mp4"]
+    done = client.post(f"/api/projects/{project}/review/done", params={"key": "clips/rally_001.mp4"}).json()
+    assert done["labels"]["unforced"] is False and done["labels"]["flagged_for_review"] == "true"
+
+    # Removing the chosen field keeps the setting (the tab reports it) and never blocks other settings.
+    schema = {**REVIEW_SCHEMA, "fields": [f for f in REVIEW_SCHEMA["fields"] if f["key"] != "unforced"]}
+    client.patch(f"/api/projects/{project}", json={"label_schema": schema})
+    assert client.get(f"/api/projects/{project}/review").json()["field"] is None
+    res = client.patch(f"/api/projects/{project}", json={"settings": {"fps": 25, "coach_review_field": "unforced"}})
+    assert res.status_code == 200 and res.json()["settings"]["fps"] == 25
+
+
+def test_coach_review_without_a_review_field(client, project):
+    assert client.get(f"/api/projects/{project}/review").json()["field"] is None
+    res = client.post(f"/api/projects/{project}/review/done", params={"key": "clips/rally_001.mp4"})
+    assert res.status_code == 400 and res.json()["error"]["code"] == "REVIEW_NOT_CONFIGURED"
+
+
+def test_coach_review_across_projects(any_client, any_project):
+    client, flagged = any_client, any_project
+    client.patch(f"/api/projects/{flagged}", json={"label_schema": REVIEW_SCHEMA})
+    _label(client, flagged, "clips/rally_001.mp4", flagged_for_review="true")
+    _label(client, flagged, "clips/serve_003.mov", flagged_for_review="false")
+    empty = create_project(client)
+    client.patch(f"/api/projects/{empty}", json={"label_schema": REVIEW_SCHEMA})
+    create_project(client)  # no review field: not listed
+
+    overview = client.get("/api/review").json()
+    assert {p["project_id"]: [v["key"] for v in p["videos"]] for p in overview} == {
+        flagged: ["clips/rally_001.mp4"],
+        empty: [],
+    }
+    assert next(p for p in overview if p["project_id"] == flagged)["field"]["label"] == "Flagged for Review"
+
+    client.post(f"/api/projects/{flagged}/review/done", params={"key": "clips/rally_001.mp4"})
+    assert all(p["videos"] == [] for p in client.get("/api/review").json())

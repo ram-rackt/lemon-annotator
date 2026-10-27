@@ -33,6 +33,13 @@ export function SettingsView() {
   const searchParams = useSearchParams();
   const requested = searchParams.get("section");
   const [section, setSection] = useState<SectionId>(isSection(requested) ? requested : "storage");
+  // This view stays mounted (hidden) on other tabs of the app, so a link to ?section=… made there
+  // arrives as a changed search param rather than a fresh mount.
+  const [lastRequested, setLastRequested] = useState(requested);
+  if (requested !== lastRequested) {
+    setLastRequested(requested);
+    if (isSection(requested)) setSection(requested);
+  }
   const hydrated = useHydrated();
   const projectQ = useProject(projectId);
   // Render data only after hydration so the first client render matches the server HTML.

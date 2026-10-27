@@ -42,6 +42,7 @@ export function DeleteProject({ project }: { project: Project }) {
       setOpen(false);
       qc.removeQueries({ queryKey: keys.project(project.id) });
       qc.invalidateQueries({ queryKey: keys.projects });
+      qc.invalidateQueries({ queryKey: keys.reviewAll });
       toast.success(`Deleted “${project.name}”`, { description: `Kept at ${res.moved_to}` });
       router.push("/");
     },

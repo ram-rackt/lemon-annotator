@@ -55,6 +55,8 @@ export interface ProjectSettings {
   fps: number;
   skip_seconds: number;
   url_expiry_seconds: number;
+  /** Key of the whole-video field that flags a video for coach review (null: detected by its name). */
+  coach_review_field: string | null;
 }
 
 export interface Project {
@@ -214,6 +216,33 @@ export interface ActivityResult {
   as_of: string;
   videos: Record<string, VideoState>;
   presence: PresenceEntry[];
+}
+
+export interface ReviewVideo {
+  key: string;
+  filename: string;
+  status: VideoStatus;
+  event_count: number;
+  duration_seconds: number | null;
+  annotated_at: string;
+  updated_by: string | null;
+  labels: Record<string, LabelValue>;
+}
+
+/** Videos in the current folder flagged for coach review, most recently saved first. */
+export interface ReviewList {
+  /** The chosen key (null: detected automatically), even when it no longer names a usable field. */
+  field_key: string | null;
+  /** The field in use (chosen or detected); null when there is none. */
+  field: SchemaField | null;
+  videos: ReviewVideo[];
+  warnings: string[];
+}
+
+/** One project's part of the dashboard's Coach review tab. */
+export interface ProjectReview extends ReviewList {
+  project_id: string;
+  project_name: string;
 }
 
 export interface ConnectionTestResult {

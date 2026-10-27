@@ -5,6 +5,9 @@ services:
     name: lemon-api
     runtime: python
     plan: free
+    # Keep the API close to the database: every request makes database round trips. Singapore is Render's
+    # nearest region to the Supabase project (Seoul). Render can't move an existing service to another region.
+    region: singapore
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     # One process: presence and per-project locks live in memory (saves are safe across processes anyway).

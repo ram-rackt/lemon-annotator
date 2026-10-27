@@ -91,7 +91,10 @@ Locally, backend settings go in `backend/.env` and frontend settings in `fronten
    (it reads `render.yaml` at the root). Fill in `LEMON_DATABASE_URL` (Session pooler string), `LEMON_SUPABASE_URL`
    (Project URL) and `LEMON_CORS_ORIGINS` (`https://example.com` until you know the Vercel URL). Once it is live,
    `https://<service>.onrender.com/api/health` should show `"storage":"database","auth":true`. (The bare address
-   answering "Not Found" is normal.) The tables are created on first start.
+   answering "Not Found" is normal.) The tables are created on first start. Keep the API near the database:
+   `render.yaml` uses Render's `singapore` region for a Supabase project in Seoul. If your Supabase project is
+   elsewhere, change `region` to the nearest of `oregon`, `ohio`, `virginia`, `frankfurt` or `singapore` before
+   creating the service, because Render can't move a service once it exists.
 3. **Vercel** ([vercel.com](https://vercel.com)): import the repository with **Root Directory** `frontend` and add
    `NEXT_PUBLIC_API_URL` (the Render URL, no trailing slash), `NEXT_PUBLIC_SUPABASE_URL` (Project URL) and
    `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`.

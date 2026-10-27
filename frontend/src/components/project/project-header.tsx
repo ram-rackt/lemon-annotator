@@ -20,20 +20,22 @@ export function ProjectHeader() {
   const project = hydrated ? projectQ.data : undefined; // match the server HTML during hydration
   const reviewEnabled = Boolean(project && reviewField(project.label_schema, project.settings.coach_review_field));
   const reviewCount = useReview(projectId, { enabled: reviewEnabled }).data?.videos.length;
+  // A coach from another workspace only reviews flagged videos: no settings or export.
+  const coachView = project?.access === "coach";
 
   const tabs = [
-    { href: `/projects/${projectId}`, label: "Annotate", icon: Clapperboard },
+    { href: `/projects/${projectId}`, label: coachView ? "Review" : "Annotate", icon: Clapperboard },
     {
       href: `/projects/${projectId}/review`,
       label: "Coach review",
       icon: Flag,
       count: reviewEnabled ? reviewCount : undefined,
     },
-    { href: `/projects/${projectId}/settings`, label: "Settings", icon: Settings2 },
+    ...(coachView ? [] : [{ href: `/projects/${projectId}/settings`, label: "Settings", icon: Settings2 }]),
   ];
 
   return (
-    <AppHeader actions={<ExportButton projectId={projectId} />}>
+    <AppHeader actions={coachView ? undefined : <ExportButton projectId={projectId} />}>
       {project ? (
         <span className="hidden max-w-[20rem] truncate text-base font-medium sm:inline">{project.name}</span>
       ) : (

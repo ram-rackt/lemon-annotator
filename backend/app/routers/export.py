@@ -4,11 +4,12 @@ import posixpath
 from fastapi import APIRouter, Depends, Query
 
 from .. import __version__, s3_service
+from ..access import project_access
 from ..auth import User, current_user
 from ..config import get_settings
 from ..deps import Store, get_store
 from ..errors import S3Error
-from ..models import ExportResult, VideoAnnotation, utcnow
+from ..models import ExportResult, Project, VideoAnnotation, utcnow
 from ..storage import json_default
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["export"])
@@ -49,9 +50,9 @@ def export_project(
     project_id: str,
     include_unannotated: bool = Query(True),
     user: User = Depends(current_user),
+    project: Project = Depends(project_access),
     store: Store = Depends(get_store),
 ):
-    project = store.get(project_id)
     stored, warnings = store.iter_annotations(project_id)
     prefix = project.storage.normalized_prefix
     # Export what the queue shows: this bucket and folder. Anything else stays on disk untouched.

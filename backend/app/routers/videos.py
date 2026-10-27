@@ -7,6 +7,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Query
 
 from .. import presence, s3_service
+from ..access import is_member, project_access
 from ..auth import User, current_user
 from ..config import get_settings
 from ..deps import Store, get_store
@@ -54,19 +55,48 @@ def belongs_to(entry_bucket: str | None, project: Project) -> bool:
 
 
 @router.get("/videos", response_model=VideoList)
-def list_videos(project_id: str, store: Store = Depends(get_store)):
+def list_videos(
+    user: User = Depends(current_user),
+    project: Project = Depends(project_access),
+    store: Store = Depends(get_store),
+):
     """The video queue. Every listing is a sync: it reads the bucket and records the result."""
-    return sync_videos(project_id, store)
+    if not is_member(user, project):
+        return flagged_queue(project, store)
+    return sync_videos(project, store)
 
 
 @router.post("/sync", response_model=VideoList)
-def sync_storage(project_id: str, store: Store = Depends(get_store)):
+def sync_storage(project: Project = Depends(project_access), store: Store = Depends(get_store)):
     """Re-read the bucket now (the "Sync storage" button)."""
-    return sync_videos(project_id, store)
+    return sync_videos(project, store)
 
 
-def sync_videos(project_id: str, store: Store) -> VideoList:
-    project = store.get(project_id)
+def flagged_queue(project: Project, store: Store) -> VideoList:
+    """The queue a coach from another workspace gets: only the videos flagged for review, from the
+    stored annotations (the bucket is never listed, and its name and folder aren't shown)."""
+    flagged = project_review(project, store).videos
+    return VideoList(
+        videos=[
+            VideoItem(
+                key=v.key,
+                filename=v.filename,
+                status=v.status,
+                event_count=v.event_count,
+                annotated_at=v.annotated_at,
+                updated_by=v.updated_by,
+            )
+            for v in flagged
+        ],
+        truncated=False,
+        bucket="",
+        prefix="",
+        sync=SyncInfo(video_count=len(flagged), synced_at=utcnow(), total_bytes=0, truncated=False),
+    )
+
+
+def sync_videos(project: Project, store: Store) -> VideoList:
+    project_id = project.id
     objects, truncated = s3_service.list_videos(project.storage, get_settings().max_list_keys)
     index = {k: e for k, e in store.load_index(project_id).items() if belongs_to(e.bucket, project)}
 
@@ -133,12 +163,10 @@ def sync_videos(project_id: str, store: Store) -> VideoList:
 
 @router.get("/videos/stream-url", response_model=StreamUrl)
 def stream_url(
-    project_id: str,
     key: str = Query(..., min_length=1),
     verify: bool = Query(True, description="HEAD the object first for a precise error"),
-    store: Store = Depends(get_store),
+    project: Project = Depends(project_access),
 ):
-    project = store.get(project_id)
     require_video_key(project, key)
     if verify:
         s3_service.head_video(project.storage, key)
@@ -147,10 +175,14 @@ def stream_url(
 
 
 @router.get("/videos/details", response_model=VideoDetails)
-def video_details(project_id: str, key: str = Query(..., min_length=1), store: Store = Depends(get_store)):
+def video_details(
+    project_id: str,
+    key: str = Query(..., min_length=1),
+    project: Project = Depends(project_access),
+    store: Store = Depends(get_store),
+):
     """Everything known about one video: S3 object metadata plus local annotation state.
     S3 failures are reported inline so local details still show for videos gone from the bucket."""
-    project = store.get(project_id)
     require_video_key(project, key)
     cfg = project.storage
     folder, filename = posixpath.split(key)
@@ -197,11 +229,11 @@ def clear_annotation(
         None, description="Revision the client saw ('' = nothing saved). If it changed meanwhile, nothing is cleared."
     ),
     user: User = Depends(current_user),
+    project: Project = Depends(project_access),
     store: Store = Depends(get_store),
 ):
     """Clear a video's saved annotations. Nothing is erased: the file goes to app_data/.trash, or the
     database row is marked deleted."""
-    project = store.get(project_id)
     # Clearing only touches stored annotations, so keys outside the current folder are fine.
     require_video_key(project, key, inside_prefix=False)
     with store.lock(project_id):
@@ -228,13 +260,15 @@ def activity(
     project_id: str,
     body: ActivityPing,
     user: User = Depends(current_user),
+    project: Project = Depends(project_access),
     store: Store = Depends(get_store),
 ):
     """Heartbeat from the Annotate view (every few seconds): records which video this user is on and
     returns the saved state of every video plus who else is where. Never touches S3."""
     as_of = utcnow()
-    project = store.get(project_id)
     presence.touch(project_id, user, body.video_key)
+    # A coach from another workspace hears only about the flagged videos (their whole queue).
+    only = None if is_member(user, project) else {v.key for v in project_review(project, store).videos}
     videos = {
         key: VideoState(
             status=entry.status,
@@ -244,30 +278,42 @@ def activity(
             revision=entry.revision,
         )
         for key, entry in store.load_index(project_id).items()
-        if belongs_to(entry.bucket, project) and key.startswith(project.storage.normalized_prefix)
+        if belongs_to(entry.bucket, project)
+        and key.startswith(project.storage.normalized_prefix)
+        and (only is None or key in only)
     }
     return ActivityResult(as_of=as_of, videos=videos, presence=presence.others(project_id, user))
 
 
 @router.get("/review", response_model=ReviewList)
-def review_videos(project_id: str, store: Store = Depends(get_store)):
+def review_videos(project: Project = Depends(project_access), store: Store = Depends(get_store)):
     """Videos flagged for coach review (see LabelSchema.review_field). Reads only stored annotations
     (never S3), from the current bucket and folder like the queue."""
-    return project_review(store.get(project_id), store)
+    return project_review(project, store)
 
 
 @review_router.get("", response_model=list[ProjectReview])
-def review_all(store: Store = Depends(get_store)):
-    """Every project that can flag videos for coach review, with its flagged videos (possibly none)."""
+def review_all(user: User = Depends(current_user), store: Store = Depends(get_store)):
+    """Every project that can flag videos for coach review, with its flagged videos (possibly none):
+    the user's own workspace, and for coaches every workspace."""
     out = []
     for project in store.list_projects():
+        if not (user.coach or is_member(user, project)):
+            continue
         try:
             review = project_review(project, store)
         except AppError as exc:  # one unreadable project must not hide the others
             log.warning("Skipping coach review for %s: %s", project.id, exc.message)
             continue
         if review.field:
-            out.append(ProjectReview(project_id=project.id, project_name=project.name, **review.model_dump()))
+            out.append(
+                ProjectReview(
+                    project_id=project.id,
+                    project_name=project.name,
+                    label_schema=project.label_schema,
+                    **review.model_dump(),
+                )
+            )
     return out
 
 
@@ -303,11 +349,11 @@ def finish_review(
     project_id: str,
     key: str = Query(..., min_length=1),
     user: User = Depends(current_user),
+    project: Project = Depends(project_access),
     store: Store = Depends(get_store),
 ):
     """The coach is done with a flagged video: clear its flag so it leaves the Coach review tab (it stays
     in the queue). Nothing else changes. Already cleared (e.g. by another coach) is not an error."""
-    project = store.get(project_id)
     require_video_key(project, key, inside_prefix=False)
     field = project.label_schema.review_field(project.settings.coach_review_field)
     if not field:
@@ -331,9 +377,8 @@ def finish_review(
             raise annotation_conflict(latest, cleared=latest is None) from exc
 
 
-@router.get("/annotations", response_model=VideoAnnotation | None)
+@router.get("/annotations", response_model=VideoAnnotation | None, dependencies=[Depends(project_access)])
 def get_annotation(project_id: str, key: str = Query(..., min_length=1), store: Store = Depends(get_store)):
-    store.get(project_id)
     return store.get_annotation(project_id, key)
 
 
@@ -343,9 +388,9 @@ def save_annotation(
     body: AnnotationSave,
     key: str = Query(..., min_length=1),
     user: User = Depends(current_user),
+    project: Project = Depends(project_access),
     store: Store = Depends(get_store),
 ):
-    project = store.get(project_id)
     require_video_key(project, key)
     schema = project.label_schema
     fps = project.settings.fps

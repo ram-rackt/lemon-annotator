@@ -247,7 +247,15 @@ def test_allowed_emails(tmp_path, monkeypatch):
         assert denied.status_code == 403 and denied.json()["error"]["code"] == "AUTH_FORBIDDEN"
 
 
-def test_saves_record_who_made_them_and_presence_is_shared(auth_client):
+@pytest.fixture
+def team_client(tmp_path, monkeypatch):
+    """Sign-in on; Alex and Sam share the "crew" workspace."""
+    with app_client(tmp_path, monkeypatch, auth=True, teams="crew: alex@example.com, sam@example.com") as c:
+        yield c
+
+
+def test_saves_record_who_made_them_and_presence_is_shared(team_client):
+    auth_client = team_client
     alex, sam = bearer(make_token("u-alex", "alex@example.com", "Alex")), bearer(make_token("u-sam", "sam@example.com", None))
     pid = create_project(auth_client, headers=alex)
 

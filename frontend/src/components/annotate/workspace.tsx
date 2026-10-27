@@ -146,6 +146,24 @@ export function AnnotateWorkspace() {
       );
     return <WorkspaceSkeleton />;
   }
+  if (list.videos.length === 0 && !workspaceShown && project.access === "coach") {
+    return (
+      <Empty className="h-full">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Flag />
+          </EmptyMedia>
+          <EmptyTitle>Nothing to review here</EmptyTitle>
+          <EmptyDescription>No videos in {project.name} are flagged for coach review right now.</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild size="sm" variant="outline">
+            <Link href="/review">Coach review</Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    );
+  }
   if (list.videos.length === 0 && !workspaceShown) {
     return (
       <Empty className="h-full">
@@ -395,6 +413,8 @@ function Workspace({
   };
   const withEvents = hasEventSection(schema);
   const coachField = reviewField(schema, project.settings.coach_review_field);
+  // A coach from another workspace: the queue holds only flagged videos, and storage stays hidden.
+  const coachView = project.access === "coach";
 
   /* ------------------------------ switching ------------------------------ */
 
@@ -653,6 +673,8 @@ function Workspace({
     } catch {
       return; // the error (or conflict) toast is already shown
     }
+    // A coach's queue is the flagged videos, so this one leaves it.
+    if (coachView) qc.invalidateQueries({ queryKey: keys.videos(projectId) });
     if (activeKeyRef.current !== current || versionRef.current !== version) return;
     let flagged: string[] = [];
     try {
@@ -669,6 +691,10 @@ function Workspace({
     if (flagged[0]) {
       doSwitch(flagged[0]);
       toast.success("Review done — next flagged video", { duration: 2000 });
+    } else if (coachView) {
+      // Nothing else here the coach may open: back to the list of every project.
+      toast.success("Review done", { description: "No other videos in this project are flagged for review." });
+      router.push("/review");
     } else {
       toast.success("Review done", {
         description: "No other videos in this project are flagged for review.",
@@ -1124,6 +1150,7 @@ function Workspace({
             onClear={setClearVideo}
             storageKey={`lemon.queue.${projectId}`}
             presence={presence}
+            limited={coachView}
           />
         </div>
         {!prefs.queueOpen && <QueueRail completed={completedCount} total={videos.length} onExpand={toggleQueue} />}
@@ -1183,16 +1210,18 @@ function Workspace({
               )}
             </div>
           </div>
-          <span
-            className={cn(
-              "hidden max-w-[40%] min-w-0 truncate font-mono text-[11px] text-muted-foreground xl:block",
-              // Room for the filename next to the review badge and button.
-              forCoach && "xl:hidden 2xl:block",
-            )}
-            title={`s3://${list.bucket}/${activeKey}`}
-          >
-            s3://{list.bucket}/{activeKey}
-          </span>
+          {!coachView && (
+            <span
+              className={cn(
+                "hidden max-w-[40%] min-w-0 truncate font-mono text-[11px] text-muted-foreground xl:block",
+                // Room for the filename next to the review badge and button.
+                forCoach && "xl:hidden 2xl:block",
+              )}
+              title={`s3://${list.bucket}/${activeKey}`}
+            >
+              s3://{list.bucket}/{activeKey}
+            </span>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon-sm" onClick={() => goRelative(-1)} aria-label="Previous video">

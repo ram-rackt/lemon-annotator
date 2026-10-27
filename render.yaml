@@ -26,3 +26,6 @@ services:
       # Your Vercel site, e.g. https://lemon-annotator.vercel.app (comma-separate several)
       - key: LEMON_CORS_ORIGINS
         sync: false
+      # Optional, added by hand under Environment (see the README's "Workspaces and coaches"):
+      #   LEMON_TEAMS    shared workspaces, e.g. "rackt: ram@rackt.in, ankana@rackt.in"
+      #   LEMON_COACHES  coaches' emails, comma-separated

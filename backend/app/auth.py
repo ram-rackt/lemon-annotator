@@ -22,9 +22,17 @@ class User:
     email: str | None
     # Shown to teammates ("Alex saved this video"). None when sign-in is off.
     name: str | None
+    # "team:<name>" (LEMON_TEAMS) or "user:<id>" (a private workspace). None when sign-in is off.
+    workspace: str | None = None
+    # LEMON_COACHES: may also review flagged videos from every workspace.
+    coach: bool = False
 
 
 LOCAL_USER = User(id="local", email=None, name=None)
+
+
+def team_workspace(name: str) -> str:
+    return f"team:{name}"
 
 _jwks_lock = threading.Lock()
 
@@ -105,4 +113,12 @@ def current_user(request: Request) -> User:
         )
     meta = claims.get("user_metadata") or {}
     name = meta.get("full_name") or meta.get("name") or (email.split("@")[0] if email else str(claims["sub"])[:8])
-    return User(id=str(claims["sub"]), email=email, name=str(name)[:80])
+    user_id = str(claims["sub"])
+    team = settings.team_of.get((email or "").lower())
+    return User(
+        id=user_id,
+        email=email,
+        name=str(name)[:80],
+        workspace=team_workspace(team) if team else f"user:{user_id}",
+        coach=(email or "").lower() in settings.coach_set,
+    )

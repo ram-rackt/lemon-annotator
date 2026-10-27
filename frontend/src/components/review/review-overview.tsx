@@ -11,22 +11,16 @@ import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { useProjects, useReviewAll } from "@/hooks/queries";
+import { useReviewAll } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
-import type { LabelSchema } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const NO_SCHEMA: LabelSchema = { event_types: [], fields: [] };
 
 /** The dashboard's Coach review tab: flagged videos from every project, grouped by project. */
 export function ReviewOverview() {
   const hydrated = useHydrated();
   const reviewQ = useReviewAll({ live: true });
-  // Label names for each video's other answers.
-  const projectsQ = useProjects();
   // Render data only after hydration so the first client render matches the server HTML.
   const reviews = hydrated ? reviewQ.data : undefined;
-  const schemas = new Map((projectsQ.data ?? []).map((p) => [p.id, p.label_schema]));
 
   // Projects with the most recently flagged work first.
   const flagged = (reviews ?? [])
@@ -98,7 +92,7 @@ export function ReviewOverview() {
                   <ReviewRow
                     projectId={p.project_id}
                     video={v}
-                    schema={schemas.get(p.project_id) ?? NO_SCHEMA}
+                    schema={p.label_schema}
                     reviewKey={p.field?.key ?? ""}
                   />
                 </li>

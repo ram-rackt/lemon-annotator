@@ -333,10 +333,15 @@ class DatabaseStore:
             )
             return cur.rowcount == 1
 
-    def create(self, name: str, description: str = "") -> Project:
+    def create(self, name: str, description: str = "", workspace: str | None = None) -> Project:
         base = slugify(name)
         for _ in range(10):
-            project = Project(id=f"{base}-{secrets.token_hex(3)}", name=name.strip(), description=description.strip())
+            project = Project(
+                id=f"{base}-{secrets.token_hex(3)}",
+                name=name.strip(),
+                description=description.strip(),
+                workspace=workspace,
+            )
             if self.insert_project(project):
                 return project
         raise StorageError("Could not allocate a project id")  # pragma: no cover

@@ -63,6 +63,8 @@ interface Props {
   storageKey: string;
   /** Other people with this project open (hosted setup). */
   presence: PresenceEntry[];
+  /** A coach from another workspace: only flagged videos, no storage details or clearing. */
+  limited?: boolean;
 }
 
 function readQueueView(storageKey: string): { query: string; filter: Filter } {
@@ -94,6 +96,7 @@ export function VideoQueue({
   onClear,
   storageKey,
   presence,
+  limited = false,
 }: Props) {
   const viewers = useMemo(() => {
     const byKey = new Map<string, PresenceEntry[]>();
@@ -137,7 +140,9 @@ export function VideoQueue({
     <div className="flex h-full min-h-0 flex-col">
       <div className="space-y-4 border-b px-4 py-4">
         <div className="flex items-center justify-between">
-          <h2 className="text-[15px] font-semibold tracking-tight">Dataset queue</h2>
+          <h2 className="text-[15px] font-semibold tracking-tight">
+            {limited ? "Flagged for review" : "Dataset queue"}
+          </h2>
           <div className="flex items-center gap-0.5">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -146,12 +151,12 @@ export function VideoQueue({
                   size="icon-xs"
                   onClick={onRefresh}
                   disabled={refreshing}
-                  aria-label="Refresh from S3"
+                  aria-label={limited ? "Refresh" : "Refresh from S3"}
                 >
                   <RefreshCw className={cn(refreshing && "animate-spin")} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Re-scan the bucket</TooltipContent>
+              <TooltipContent>{limited ? "Refresh the flagged videos" : "Re-scan the bucket"}</TooltipContent>
             </Tooltip>
             {onCollapse && (
               <Tooltip>
@@ -280,9 +285,11 @@ export function VideoQueue({
                   {v.filename}
                 </ContextMenuLabel>
                 <ContextMenuSeparator />
-                <ContextMenuItem onSelect={() => onShowDetails(v)}>
-                  <Info /> View details
-                </ContextMenuItem>
+                {!limited && (
+                  <ContextMenuItem onSelect={() => onShowDetails(v)}>
+                    <Info /> View details
+                  </ContextMenuItem>
+                )}
                 {!active && (
                   <ContextMenuItem onSelect={() => onSelect(v.key)} disabled={v.missing}>
                     <Play /> Annotate this video
@@ -292,16 +299,22 @@ export function VideoQueue({
                   <ExternalLink /> Open in new tab
                 </ContextMenuItem>
                 <ContextMenuSeparator />
-                <ContextMenuItem onSelect={() => copyText(`s3://${bucket}/${v.key}`, "S3 URI copied")}>
-                  <Copy /> Copy S3 URI
-                </ContextMenuItem>
+                {!limited && (
+                  <ContextMenuItem onSelect={() => copyText(`s3://${bucket}/${v.key}`, "S3 URI copied")}>
+                    <Copy /> Copy S3 URI
+                  </ContextMenuItem>
+                )}
                 <ContextMenuItem onSelect={() => copyText(v.key, "Key copied")}>
                   <Copy /> Copy key
                 </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem variant="destructive" onSelect={() => onClear(v)} disabled={!canClear}>
-                  <Eraser /> Clear annotations…
-                </ContextMenuItem>
+                {!limited && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem variant="destructive" onSelect={() => onClear(v)} disabled={!canClear}>
+                      <Eraser /> Clear annotations…
+                    </ContextMenuItem>
+                  </>
+                )}
               </ContextMenuContent>
             </ContextMenu>
           );

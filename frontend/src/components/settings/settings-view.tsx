@@ -12,6 +12,7 @@ import { SchemaBuilder } from "@/components/settings/schema-builder";
 import { StorageForm } from "@/components/settings/storage-form";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useProject } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
@@ -51,6 +52,30 @@ export function SettingsView() {
     setSection(id);
     window.history.replaceState(null, "", `?section=${id}`);
   };
+
+  if (project?.access === "coach") {
+    return (
+      <Empty className="h-full">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <SlidersHorizontal />
+          </EmptyMedia>
+          <EmptyTitle>Settings are for the project&apos;s team</EmptyTitle>
+          <EmptyDescription>
+            As a coach you review the videos flagged in this project. Its storage, labels and settings are managed by
+            the team it belongs to.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Button asChild variant="outline">
+            <Link href="/review">
+              Coach review <ArrowRight />
+            </Link>
+          </Button>
+        </EmptyContent>
+      </Empty>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto">

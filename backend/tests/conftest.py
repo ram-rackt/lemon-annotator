@@ -39,7 +39,7 @@ def _wipe_postgres(url: str) -> None:
 
 
 @contextmanager
-def app_client(tmp_path, monkeypatch, *, database: bool = False, auth: bool = False):
+def app_client(tmp_path, monkeypatch, *, database: bool = False, auth: bool = False, teams: str = "", coaches: str = ""):
     """API client backed by an in-memory S3 (moto) and either a temp ./app_data folder or a database.
     Every LEMON_* setting is set explicitly so a developer's backend/.env never leaks into tests."""
     db_url = ""
@@ -54,6 +54,8 @@ def app_client(tmp_path, monkeypatch, *, database: bool = False, auth: bool = Fa
         "LEMON_SUPABASE_URL": SUPABASE_URL if auth else "",
         "LEMON_SUPABASE_JWT_SECRET": JWT_SECRET if auth else "",
         "LEMON_ALLOWED_EMAILS": "",
+        "LEMON_TEAMS": teams,
+        "LEMON_COACHES": coaches,
     }
     for name, value in env.items():
         monkeypatch.setenv(name, value)

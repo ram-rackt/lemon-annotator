@@ -71,6 +71,8 @@ export interface Project {
   last_sync: SyncInfo | null;
   /** completed / in_progress / total_events: current bucket and folder. all_annotated: every folder. */
   stats: { completed: number; in_progress: number; total_events: number; all_annotated: number };
+  /** "coach": a coach from another workspace, who only gets the flagged videos (no storage, progress or settings). */
+  access: "member" | "coach";
 }
 
 export interface ProjectUpdate {
@@ -243,6 +245,8 @@ export interface ReviewList {
 export interface ProjectReview extends ReviewList {
   project_id: string;
   project_name: string;
+  /** Names the other whole-video answers shown with each video. */
+  label_schema: LabelSchema;
 }
 
 export interface ConnectionTestResult {

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     supabase_jwt_secret: str = ""
     # Optional comma-separated list of emails allowed to use the app (on top of having an account).
     allowed_emails: str = ""
+    # Shared workspaces: "name: email, email; other: email". Everyone not listed works in a private
+    # workspace of their own. The first team also takes over projects made before workspaces existed.
+    teams: str = ""
+    # Comma-separated emails of coaches: they can also review flagged videos from every workspace.
+    coaches: str = ""
     # Comma-separated list of browser origins allowed to call the API directly.
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     # Host headers the API answers to when sign-in is off ("*" allows any). Protects against DNS rebinding.
@@ -45,6 +50,25 @@ class Settings(BaseSettings):
     def _strip(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("teams")
+    @classmethod
+    def _check_teams(cls, value: str) -> str:
+        parse_teams(value)  # fail at startup rather than put someone in the wrong workspace
+        return value
+
+    @property
+    def team_list(self) -> list[tuple[str, list[str]]]:
+        return parse_teams(self.teams)
+
+    @property
+    def team_of(self) -> dict[str, str]:
+        """Email -> team name."""
+        return {email: name for name, emails in self.team_list for email in emails}
+
+    @property
+    def coach_set(self) -> set[str]:
+        return {e.strip().lower() for e in self.coaches.split(",") if e.strip()}
+
     @property
     def auth_enabled(self) -> bool:
         return bool(self.supabase_url or self.supabase_jwt_secret)
@@ -60,6 +84,28 @@ class Settings(BaseSettings):
     @property
     def allowed_email_set(self) -> set[str]:
         return {e.strip().lower() for e in self.allowed_emails.split(",") if e.strip()}
+
+
+def parse_teams(value: str) -> list[tuple[str, list[str]]]:
+    """"rackt: a@x.com, b@x.com; other: c@y.com" -> [("rackt", ["a@x.com", "b@x.com"]), ("other", ["c@y.com"])]."""
+    teams: list[tuple[str, list[str]]] = []
+    seen: dict[str, str] = {}
+    for part in value.split(";"):
+        if not part.strip():
+            continue
+        name, sep, members = part.partition(":")
+        name = name.strip().lower()
+        emails = [e.strip().lower() for e in members.split(",") if e.strip()]
+        if not sep or not name or not emails:
+            raise ValueError(f'LEMON_TEAMS: write each team as "name: email, email" (got "{part.strip()}")')
+        if any(t == name for t, _ in teams):
+            raise ValueError(f'LEMON_TEAMS: team "{name}" is listed twice')
+        for email in emails:
+            if email in seen:
+                raise ValueError(f"LEMON_TEAMS: {email} is in both {seen[email]!r} and {name!r}")
+            seen[email] = name
+        teams.append((name, emails))
+    return teams
 
 
 @lru_cache

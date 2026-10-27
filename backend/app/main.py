@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import __version__
+from .access import claim_unowned_projects, project_access
 from .auth import current_user
 from .config import get_settings
 from .db_store import DatabaseStore
@@ -40,6 +41,7 @@ async def lifespan(_: FastAPI):
     _check_deployment()
     store = get_store()
     log.info("Storage: %s, sign-in %s", store.root, "required" if get_settings().auth_enabled else "off (local only)")
+    claim_unowned_projects(store)
     yield
 
 
@@ -134,9 +136,12 @@ def health():
     }
 
 
-# Every other endpoint requires a signed-in user (when sign-in is configured).
+# Every other endpoint requires a signed-in user (when sign-in is configured), and everything under
+# /api/projects/{project_id} a workspace member (or, for a few endpoints, a coach): see access.py.
+# The projects router checks that per endpoint, since its list and create endpoints have no project.
 signed_in = [Depends(current_user)]
+in_project = [*signed_in, Depends(project_access)]
 app.include_router(projects.router, dependencies=signed_in)
-app.include_router(videos.router, dependencies=signed_in)
-app.include_router(export.router, dependencies=signed_in)
+app.include_router(videos.router, dependencies=in_project)
+app.include_router(export.router, dependencies=in_project)
 app.include_router(videos.review_router, dependencies=signed_in)

@@ -243,7 +243,7 @@ class ProjectStore:
                 hint=str(exc.errors()[0].get("msg")) if exc.errors() else None,
             ) from exc
 
-    def create(self, name: str, description: str = "") -> Project:
+    def create(self, name: str, description: str = "", workspace: str | None = None) -> Project:
         base = slugify(name)
         for _ in range(10):
             project_id = f"{base}-{secrets.token_hex(3)}"
@@ -251,7 +251,7 @@ class ProjectStore:
                 break
         else:  # pragma: no cover
             raise StorageError("Could not allocate a project id")
-        project = Project(id=project_id, name=name.strip(), description=description.strip())
+        project = Project(id=project_id, name=name.strip(), description=description.strip(), workspace=workspace)
         with self.lock(project_id):
             project_dir = self.projects_dir / project_id
             (project_dir / "annotations").mkdir(parents=True, exist_ok=True)

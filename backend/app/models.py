@@ -238,6 +238,9 @@ class Project(BaseModel):
     label_schema: LabelSchema = Field(default_factory=LabelSchema)
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
     last_sync: SyncInfo | None = None
+    # Who the project belongs to: "team:<name>" or "user:<id>". None: made before workspaces existed
+    # (or locally without sign-in), so every signed-in user shares it.
+    workspace: str | None = None
 
 
 class ProgressStats(BaseModel):
@@ -260,6 +263,9 @@ class ProjectPublic(BaseModel):
     settings: ProjectSettings
     last_sync: SyncInfo | None
     stats: ProgressStats
+    # "coach": a coach from another workspace, who only sees the videos flagged for review
+    # (no storage details, progress or settings).
+    access: Literal["member", "coach"] = "member"
 
 
 class ProjectCreate(BaseModel):
@@ -456,6 +462,8 @@ class ProjectReview(ReviewList):
 
     project_id: str
     project_name: str
+    # Names the other whole-video answers shown with each video (coaches don't have the project itself).
+    label_schema: LabelSchema
 
 
 class ActivityPing(BaseModel):

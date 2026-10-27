@@ -276,6 +276,10 @@ export function useFinishReview(id: string) {
         prev?.map((p) => (p.project_id === id ? without(p) : p)),
       );
       invalidateReview(qc, id);
+      // A coach's queue is the flagged videos (no bucket listing, so refreshing it is cheap).
+      if (qc.getQueryData<Project>(keys.project(id))?.access === "coach") {
+        qc.invalidateQueries({ queryKey: keys.videos(id) });
+      }
       // An open Annotate view re-reads it (and takes it over unless it has unsaved edits).
       qc.invalidateQueries({ queryKey: keys.annotation(id, key) });
       qc.removeQueries({ queryKey: keys.details(id, key) });

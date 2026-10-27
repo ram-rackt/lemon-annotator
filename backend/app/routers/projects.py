@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, status
 
 from .. import s3_service
+from ..access import is_member, project_access
 from ..auth import User, current_user
 from ..config import get_settings
-from ..deps import Store, get_store, to_public
+from ..deps import Store, get_store, to_coach_view, to_public
 from ..errors import ConflictError, ValidationError
 from ..models import (
     ConnectionTestResult,
+    Project,
     ProjectCreate,
     ProjectPublic,
     ProjectUpdate,
@@ -17,21 +19,27 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
 @router.get("", response_model=list[ProjectPublic])
-def list_projects(store: Store = Depends(get_store)):
-    return [to_public(p, store) for p in store.list_projects()]
+def list_projects(user: User = Depends(current_user), store: Store = Depends(get_store)):
+    """The signed-in user's workspace."""
+    return [to_public(p, store) for p in store.list_projects() if is_member(user, p)]
 
 
 @router.post("", response_model=ProjectPublic, status_code=status.HTTP_201_CREATED)
-def create_project(body: ProjectCreate, store: Store = Depends(get_store)):
-    return to_public(store.create(body.name, body.description), store)
+def create_project(body: ProjectCreate, user: User = Depends(current_user), store: Store = Depends(get_store)):
+    return to_public(store.create(body.name, body.description, workspace=user.workspace), store)
 
 
 @router.get("/{project_id}", response_model=ProjectPublic)
-def get_project(project_id: str, store: Store = Depends(get_store)):
-    return to_public(store.get(project_id), store)
+def get_project(
+    project: Project = Depends(project_access),
+    user: User = Depends(current_user),
+    store: Store = Depends(get_store),
+):
+    return to_public(project, store) if is_member(user, project) else to_coach_view(project)
 
 
-@router.patch("/{project_id}", response_model=ProjectPublic)
+# Changes: members only (project_access refuses everyone else).
+@router.patch("/{project_id}", response_model=ProjectPublic, dependencies=[Depends(project_access)])
 def update_project(project_id: str, body: ProjectUpdate, store: Store = Depends(get_store)):
     with store.lock(project_id):
         project = store.get(project_id)
@@ -74,19 +82,14 @@ def update_project(project_id: str, body: ProjectUpdate, store: Store = Depends(
     return to_public(project, store)
 
 
-@router.delete("/{project_id}", status_code=status.HTTP_200_OK)
+@router.delete("/{project_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(project_access)])
 def delete_project(project_id: str, user: User = Depends(current_user), store: Store = Depends(get_store)):
     moved_to = store.delete(project_id, by=user.name)
     return {"ok": True, "moved_to": str(moved_to)}
 
 
 @router.post("/{project_id}/storage/test", response_model=ConnectionTestResult)
-def test_storage(
-    project_id: str,
-    body: StorageUpdate | None = None,
-    store: Store = Depends(get_store),
-):
+def test_storage(body: StorageUpdate | None = None, project: Project = Depends(project_access)):
     """Test the saved settings, or unsaved edits merged over them when a body is sent."""
-    project = store.get(project_id)
     cfg = body.apply_to(project.storage) if body else project.storage
     return s3_service.test_connection(cfg, get_settings().max_list_keys)

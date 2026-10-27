@@ -65,6 +65,8 @@ Nothing is required for local use: AWS credentials are entered per project in th
 | Backend | `LEMON_SUPABASE_URL` | empty | Supabase project URL. Set: every request needs a signed-in user |
 | Backend | `LEMON_SUPABASE_JWT_SECRET` | empty | Only for older Supabase projects that still sign with the legacy JWT secret |
 | Backend | `LEMON_ALLOWED_EMAILS` | empty | Optional: only these emails may use the app (comma-separated) |
+| Backend | `LEMON_TEAMS` | empty | Shared workspaces, e.g. `rackt: ram@rackt.in, ankana@rackt.in` (see [Workspaces](#workspaces-and-coaches)) |
+| Backend | `LEMON_COACHES` | empty | Coaches' emails (comma-separated): they review flagged videos from every workspace |
 | Backend | `LEMON_CORS_ORIGINS` | `http://localhost:3000,...` | Sites allowed to call the API from a browser (your Vercel URL when hosted) |
 | Backend | `LEMON_DATA_DIR` | `./app_data` | Where data is stored without a database |
 | Backend | `LEMON_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` | Host names accepted while sign-in is off |
@@ -120,15 +122,41 @@ a project after a week without activity (resume it from the Supabase dashboard).
   hasn't been autosaved yet first.
 - `LEMON_ALLOWED_EMAILS` on Render optionally limits the app to specific emails, even if more accounts exist.
 
+### Workspaces and coaches
+
+Each account works in a **workspace**: its own projects, folders, queue and progress, which nobody else sees.
+
+- **Private (the default):** anyone not listed in `LEMON_TEAMS` gets a workspace of their own. Their projects are
+  theirs alone, and stay there across sign-ins.
+- **Shared:** people listed together in `LEMON_TEAMS` on Render share one workspace and its dashboard, e.g.
+  `rackt: ram@rackt.in, ankana@rackt.in`. Separate several teams with `;`, e.g.
+  `rackt: ram@rackt.in, ankana@rackt.in; north: a@x.com, b@x.com`. Emails are matched ignoring case, and each email
+  may be in one team only.
+- **Coaches:** emails in `LEMON_COACHES` (comma-separated) see the videos flagged for review in **every** workspace,
+  under **Coach review**. Opening one shows only that project's flagged videos: no other videos, settings, export or
+  S3 details. The coach can change the labels and events of a flagged video and press **Done reviewing**; once it is
+  done it leaves their reach again. A coach also has a private workspace of their own, like anyone else.
+
+To add someone: create their user in Supabase (Authentication > Users > Add user, "Auto Confirm User" ticked). They
+get a private workspace at once. To share a workspace or make someone a coach, edit `LEMON_TEAMS` or `LEMON_COACHES`
+under **Environment** on Render and save; the API restarts with it in about a minute.
+
+Projects made before workspaces existed belong to the **first** team in `LEMON_TEAMS` (they move there when the API
+starts, once). Until a team is set they are shared by everyone signed in, as before. Moving someone to another team
+leaves the projects where they are: they belong to the workspace, not the person.
+
 ### Using the shared database from your computer
 
 With `LEMON_DATABASE_URL` and `LEMON_SUPABASE_URL` in `backend/.env`, and `NEXT_PUBLIC_SUPABASE_URL` and
 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` in `frontend/.env.local`, `npm run dev` asks you to sign in and works on the
-same data as the hosted app. Empty those values to go back to a private, local-only Lemon (`./app_data`).
+same data as the hosted app, with the same workspaces (copy `LEMON_TEAMS` and `LEMON_COACHES` too). Without
+`LEMON_SUPABASE_URL` nobody signs in, so a local API pointed at the database shows every workspace's projects. Empty
+those values to go back to a private, local-only Lemon (`./app_data`).
 
 ### Working together
 
-- Everyone sees the same projects, queue and progress; the queue refreshes every 15 seconds and when you return to the tab.
+- Everyone in a workspace sees the same projects, queue and progress; the queue refreshes every 15 seconds and when
+  you return to the tab.
 - The queue shows who is on which video, and the player header says when someone else is on yours.
 - Every save says which version it started from. If someone else saved the video in the meantime, nothing is
   overwritten: you choose **Load theirs** or **Keep mine**. If they saved while you had no unsaved changes, their
@@ -190,6 +218,9 @@ Coach review tab). They stay in the queue too, and are listed most recently save
 labels. The coach opens one, makes any changes and presses **Done reviewing**, which sets the
 flag to `false`, saves, and opens the next flagged video. **Done** on the list does the same without opening it. The
 list refreshes every 15 seconds while it is open.
+
+Everyone sees the flagged videos of their own workspace. Coaches (`LEMON_COACHES`) see them from every workspace,
+grouped by project; see [Workspaces and coaches](#workspaces-and-coaches).
 
 ### Keyboard shortcuts
 
@@ -288,8 +319,9 @@ database daily on paid plans; on the free plan, export regularly.
 ## Project structure
 
 ```
-backend/app/       FastAPI: main.py (app, host check), auth.py (sign-in), models.py, storage.py (JSON files),
-                   db_store.py (Postgres), presence.py, s3_service.py, migrate.py, routers/
+backend/app/       FastAPI: main.py (app, host check), auth.py (sign-in), access.py (workspaces, coaches),
+                   models.py, storage.py (JSON files), db_store.py (Postgres), presence.py, s3_service.py,
+                   migrate.py, routers/
 backend/tests/     API tests against a simulated S3 (moto), for both storage types
 frontend/src/      Next.js 16 + React 19 + Tailwind + shadcn/ui: app/ (pages), components/ (annotate, settings,
                    dashboard, auth: sign-in screen and account menu), hooks/, lib/ (API client, Supabase client)
@@ -313,6 +345,8 @@ render.yaml        Render Blueprint for the API
 | Hosted app can't reach the API (network error) | `LEMON_CORS_ORIGINS` on Render must be exactly your Vercel URL (no trailing slash) |
 | "Incorrect email or password" | Check both; the owner can reset it in Supabase > Authentication > Users |
 | "This email isn't confirmed yet" | In Supabase > Authentication > Users, confirm the user (or re-create it with Auto Confirm) |
+| Someone sees an empty dashboard instead of the team's projects | Their email isn't in `LEMON_TEAMS` on Render (check the spelling), so they're in a private workspace |
+| The API won't start after editing `LEMON_TEAMS` | The Render log names the problem: each team must be `name: email, email`, teams separated by `;`, each email in one team |
 | Password-reset link opens the wrong site | Set Site URL and Redirect URLs in Supabase > Authentication > URL Configuration |
 | "This account is not allowed" | Add the email to `LEMON_ALLOWED_EMAILS`, or remove that setting |
 

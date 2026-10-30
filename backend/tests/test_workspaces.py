@@ -120,6 +120,8 @@ def test_coach_sees_only_flagged_videos(ws_client):
         ("post", "/sync", {}),
         ("get", "/videos/details", {"params": {"key": FLAGGED}}),
         ("delete", "/annotations", {"params": {"key": FLAGGED}}),
+        ("delete", "/videos", {"params": {"key": FLAGGED}}),
+        ("post", "/videos/restore", {"params": {"key": FLAGGED}}),
         ("post", "/export", {}),
     ]:
         res = getattr(client, method)(base + path, headers=COACH, **kwargs)

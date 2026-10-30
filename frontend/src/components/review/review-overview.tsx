@@ -89,12 +89,7 @@ export function ReviewOverview() {
             <ul className="divide-y overflow-hidden rounded-xl border">
               {p.videos.map((v) => (
                 <li key={v.key}>
-                  <ReviewRow
-                    projectId={p.project_id}
-                    video={v}
-                    schema={p.label_schema}
-                    reviewKey={p.field?.key ?? ""}
-                  />
+                  <ReviewRow projectId={p.project_id} video={v} />
                 </li>
               ))}
             </ul>

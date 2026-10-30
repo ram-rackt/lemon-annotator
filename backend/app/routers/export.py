@@ -55,11 +55,12 @@ def export_project(
 ):
     stored, warnings = store.iter_annotations(project_id)
     prefix = project.storage.normalized_prefix
+    removed = project.removed_keys  # left out, like in the queue
     # Export what the queue shows: this bucket and folder. Anything else stays on disk untouched.
     annotations = {
         a.video_key: a
         for a in stored
-        if a.bucket in (None, project.storage.bucket) and a.video_key.startswith(prefix)
+        if a.bucket in (None, project.storage.bucket) and a.video_key.startswith(prefix) and a.video_key not in removed
     }
     if skipped := len(stored) - len(annotations):
         warnings.append(
@@ -72,7 +73,7 @@ def export_project(
     if include_unannotated and project.storage.is_configured:
         try:
             objects, truncated = s3_service.list_videos(project.storage, get_settings().max_list_keys)
-            bucket_keys = [o.key for o in objects]
+            bucket_keys = [o.key for o in objects if o.key not in removed]
             if truncated:
                 warnings.append("Bucket listing was truncated; some unannotated videos are not listed.")
         except S3Error as exc:

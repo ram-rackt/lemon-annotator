@@ -29,6 +29,11 @@ def to_public(project: Project, store: Store) -> ProjectPublic:
         settings=project.settings,
         last_sync=project.last_sync,
         stats=store.stats(project),
+        removed_videos=sorted(
+            (r for r in project.removed_videos if r.bucket == project.storage.bucket),
+            key=lambda r: r.removed_at,
+            reverse=True,
+        ),
     )
 
 

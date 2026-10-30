@@ -225,6 +225,15 @@ class SyncInfo(BaseModel):
     truncated: bool = False
 
 
+class RemovedVideo(BaseModel):
+    """A video taken out of the project ("Remove from project"). The file in S3 is untouched."""
+
+    key: str
+    bucket: str
+    removed_at: datetime = Field(default_factory=utcnow)
+    removed_by: str | None = None
+
+
 class Project(BaseModel):
     """The full contents of app_data/projects/<id>/project.json."""
 
@@ -241,6 +250,13 @@ class Project(BaseModel):
     # Who the project belongs to: "team:<name>" or "user:<id>". None: made before workspaces existed
     # (or locally without sign-in), so every signed-in user shares it.
     workspace: str | None = None
+    # Left out of the queue and the export until restored (Settings > General).
+    removed_videos: list[RemovedVideo] = Field(default_factory=list)
+
+    @property
+    def removed_keys(self) -> set[str]:
+        """Removed videos of the current bucket (a removal never hides a same-named video elsewhere)."""
+        return {r.key for r in self.removed_videos if r.bucket == self.storage.bucket}
 
 
 class ProgressStats(BaseModel):
@@ -263,6 +279,8 @@ class ProjectPublic(BaseModel):
     settings: ProjectSettings
     last_sync: SyncInfo | None
     stats: ProgressStats
+    # Removed from the queue (current bucket), newest first. Empty for a coach.
+    removed_videos: list[RemovedVideo] = Field(default_factory=list)
     # "coach": a coach from another workspace, who only sees the videos flagged for review
     # (no storage details, progress or settings).
     access: Literal["member", "coach"] = "member"
@@ -462,8 +480,6 @@ class ProjectReview(ReviewList):
 
     project_id: str
     project_name: str
-    # Names the other whole-video answers shown with each video (coaches don't have the project itself).
-    label_schema: LabelSchema
 
 
 class ActivityPing(BaseModel):

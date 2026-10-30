@@ -8,6 +8,7 @@ import { useState } from "react";
 import { ErrorState } from "@/components/error-state";
 import { DeleteProject } from "@/components/settings/delete-project";
 import { GeneralSettings } from "@/components/settings/general-settings";
+import { RemovedVideos } from "@/components/settings/removed-videos";
 import { SchemaBuilder } from "@/components/settings/schema-builder";
 import { StorageForm } from "@/components/settings/storage-form";
 import { Button } from "@/components/ui/button";
@@ -105,6 +106,7 @@ export function SettingsView() {
               </div>
               <div hidden={section !== "general"} className="grid gap-6">
                 <GeneralSettings key={`general-${project.id}`} project={project} />
+                <RemovedVideos project={project} />
                 <DeleteProject project={project} />
               </div>
             </>

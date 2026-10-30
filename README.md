@@ -204,8 +204,10 @@ those values to go back to a private, local-only Lemon (`./app_data`).
 4. **Export**: **Export Project JSON** downloads the whole project and keeps a copy: in
    `app_data/projects/<id>/exports/` locally, or in the `lemon.exports` table when hosted.
 
-Right-click a video in the queue to view its details, copy its S3 URI, open it in a new tab, or clear its
-annotations. To jump to another project from any page, use the search box in the top bar (`Ctrl` + `K`). Once a project has annotations, its bucket can't be changed; create a new project instead.
+Right-click a video in the queue to view its details, copy its S3 URI, open it in a new tab, clear its
+annotations, or **delete** it. Deleting asks for confirmation, then takes the video out of the queue and the export for
+everyone in the workspace and clears its annotations; the file stays in S3. **Undo** on the message, or **Restore**
+under **Settings > General > Deleted videos**, puts it back. To jump to another project from any page, use the search box in the top bar (`Ctrl` + `K`). Once a project has annotations, its bucket can't be changed; create a new project instead.
 
 ### Coach review
 
@@ -214,8 +216,8 @@ Give the label schema a whole-video field that flags a video for review: a choic
 pick another under **Settings > General > Coach review field**.
 
 Videos set to `true` appear in the **Coach review** tab on the dashboard, grouped by project (and in each project's own
-Coach review tab). They stay in the queue too, and are listed most recently saved first with their other whole-video
-labels. The coach opens one, makes any changes and presses **Done reviewing**, which sets the
+Coach review tab). They stay in the queue too. Each is listed, most recently saved first, with just its name, folder,
+length and when it was last updated. The coach opens one, makes any changes and presses **Done reviewing**, which sets the
 flag to `false`, saves, and opens the next flagged video. **Done** on the list does the same without opening it. The
 list refreshes every 15 seconds while it is open.
 

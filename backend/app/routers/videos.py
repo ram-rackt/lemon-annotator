@@ -10,15 +10,17 @@ from .. import presence, s3_service
 from ..access import is_member, project_access
 from ..auth import User, current_user
 from ..config import get_settings
-from ..deps import Store, get_store
-from ..errors import AppError, ConflictError, S3Error, StorageError, ValidationError
+from ..deps import Store, get_store, to_public
+from ..errors import AppError, ConflictError, NotFoundError, S3Error, StorageError, ValidationError
 from ..models import (
     ActivityPing,
     ActivityResult,
     AnnotationSave,
     ClearResult,
     Project,
+    ProjectPublic,
     ProjectReview,
+    RemovedVideo,
     ReviewList,
     ReviewVideo,
     SchemaField,
@@ -98,7 +100,12 @@ def flagged_queue(project: Project, store: Store) -> VideoList:
 def sync_videos(project: Project, store: Store) -> VideoList:
     project_id = project.id
     objects, truncated = s3_service.list_videos(project.storage, get_settings().max_list_keys)
-    index = {k: e for k, e in store.load_index(project_id).items() if belongs_to(e.bucket, project)}
+    # Removed videos are left out of everything, including the counts below.
+    removed = project.removed_keys
+    objects = [o for o in objects if o.key not in removed]
+    index = {
+        k: e for k, e in store.load_index(project_id).items() if belongs_to(e.bucket, project) and k not in removed
+    }
 
     videos: list[VideoItem] = []
     seen: set[str] = set()
@@ -237,22 +244,68 @@ def clear_annotation(
     # Clearing only touches stored annotations, so keys outside the current folder are fine.
     require_video_key(project, key, inside_prefix=False)
     with store.lock(project_id):
-        if revision is not None:
-            try:
-                current = store.get_annotation(project_id, key)
-            except StorageError:
-                current = None  # unreadable: clearing it is exactly what's wanted
-            # Nothing saved now: nothing to protect. Saved, but not the version the client saw: refuse.
-            if current is not None and current.revision != revision:
-                who = current.updated_by or "Someone else"
-                raise ConflictError(
-                    f"{who} saved this video after you last saw it, so nothing was cleared.",
-                    code="CLEAR_CONFLICT",
-                    hint="Open the video to see the latest version, then clear it again if you still want to.",
-                    details={"revision": current.revision, "updated_by": current.updated_by},
-                )
+        refuse_if_saved_since(store, project_id, key, revision, action="cleared", retry="clear it")
         moved = store.clear_annotation(project_id, key, by=user.name)
     return ClearResult(key=key, cleared=moved is not None, moved_to=str(moved) if moved else None)
+
+
+def refuse_if_saved_since(store: Store, project_id: str, key: str, revision: str | None, *, action: str, retry: str):
+    """`revision` is the saved version the client saw ('' = nothing saved; None = don't check). Refuse when
+    someone saved another one since, so their work is never thrown away unseen. Call under the lock."""
+    if revision is None:
+        return
+    try:
+        current = store.get_annotation(project_id, key)
+    except StorageError:
+        current = None  # unreadable: clearing it is exactly what's wanted
+    # Nothing saved now: nothing to protect. Saved, but not the version the client saw: refuse.
+    if current is not None and current.revision != revision:
+        who = current.updated_by or "Someone else"
+        raise ConflictError(
+            f"{who} saved this video after you last saw it, so nothing was {action}.",
+            code="CLEAR_CONFLICT",
+            hint=f"Open the video to see the latest version, then {retry} again if you still want to.",
+            details={"revision": current.revision, "updated_by": current.updated_by},
+        )
+
+
+@router.delete("/videos", response_model=ClearResult)
+def remove_video(
+    project_id: str,
+    key: str = Query(..., min_length=1),
+    revision: str | None = Query(None, description="As for clearing: refused if someone saved since"),
+    user: User = Depends(current_user),
+    project: Project = Depends(project_access),
+    store: Store = Depends(get_store),
+):
+    """Remove a video from the project, for everyone in the workspace: it leaves the queue and the export,
+    and its annotations are cleared (kept like "Clear annotations" does). The file in S3 is not touched,
+    and restoring brings the video back."""
+    require_video_key(project, key, inside_prefix=False)
+    with store.lock(project_id):
+        refuse_if_saved_since(store, project_id, key, revision, action="removed", retry="remove it")
+        moved = store.clear_annotation(project_id, key, by=user.name)
+        fresh = store.get(project_id)
+        if key not in fresh.removed_keys:
+            fresh.removed_videos.append(RemovedVideo(key=key, bucket=fresh.storage.bucket, removed_by=user.name))
+            store.save(fresh, touch=False)
+    return ClearResult(key=key, cleared=moved is not None, moved_to=str(moved) if moved else None)
+
+
+@router.post("/videos/restore", response_model=ProjectPublic)
+def restore_video(
+    project_id: str,
+    key: str = Query(..., min_length=1),
+    store: Store = Depends(get_store),
+):
+    """Put a removed video back in the queue (without the annotations cleared when it was removed)."""
+    with store.lock(project_id):
+        project = store.get(project_id)
+        project.removed_videos = [
+            r for r in project.removed_videos if not (r.key == key and r.bucket == project.storage.bucket)
+        ]
+        store.save(project, touch=False)
+    return to_public(project, store)
 
 
 @router.post("/activity", response_model=ActivityResult)
@@ -306,14 +359,7 @@ def review_all(user: User = Depends(current_user), store: Store = Depends(get_st
             log.warning("Skipping coach review for %s: %s", project.id, exc.message)
             continue
         if review.field:
-            out.append(
-                ProjectReview(
-                    project_id=project.id,
-                    project_name=project.name,
-                    label_schema=project.label_schema,
-                    **review.model_dump(),
-                )
-            )
+            out.append(ProjectReview(project_id=project.id, project_name=project.name, **review.model_dump()))
     return out
 
 
@@ -392,6 +438,12 @@ def save_annotation(
     store: Store = Depends(get_store),
 ):
     require_video_key(project, key)
+    if key in project.removed_keys:
+        raise NotFoundError(
+            "This video was removed from the project, so the changes were not saved.",
+            code="VIDEO_REMOVED",
+            hint="Restore it under Settings > General to work on it again.",
+        )
     schema = project.label_schema
     fps = project.settings.fps
     event_fields = [f for f in schema.fields if f.scope == "event"]

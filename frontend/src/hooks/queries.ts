@@ -45,6 +45,19 @@ export function useProject(id: string) {
   return useQuery({ queryKey: keys.project(id), queryFn: () => api.getProject(id), enabled: useSignedIn() });
 }
 
+/** Put a removed video back in the queue. */
+export function useRestoreVideo(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (key: string) => api.restoreVideo(id, key),
+    onSuccess: (project: Project) => {
+      qc.setQueryData(keys.project(id), project);
+      qc.invalidateQueries({ queryKey: keys.projects, exact: true });
+      qc.invalidateQueries({ queryKey: keys.videos(id) });
+    },
+  });
+}
+
 export function useUpdateProject(id: string) {
   const qc = useQueryClient();
   return useMutation({

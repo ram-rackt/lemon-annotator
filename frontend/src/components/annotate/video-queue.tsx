@@ -13,6 +13,7 @@ import {
   Play,
   RefreshCw,
   Search,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -59,6 +60,8 @@ interface Props {
   onShowDetails: (video: VideoItem) => void;
   onOpenVideo: (video: VideoItem) => void;
   onClear: (video: VideoItem) => void;
+  /** Take the video out of the project (asks for confirmation first). */
+  onRemove: (video: VideoItem) => void;
   /** localStorage key under which the filter and search are remembered (per project). */
   storageKey: string;
   /** Other people with this project open (hosted setup). */
@@ -94,6 +97,7 @@ export function VideoQueue({
   onShowDetails,
   onOpenVideo,
   onClear,
+  onRemove,
   storageKey,
   presence,
   limited = false,
@@ -312,6 +316,9 @@ export function VideoQueue({
                     <ContextMenuSeparator />
                     <ContextMenuItem variant="destructive" onSelect={() => onClear(v)} disabled={!canClear}>
                       <Eraser /> Clear annotations…
+                    </ContextMenuItem>
+                    <ContextMenuItem variant="destructive" onSelect={() => onRemove(v)}>
+                      <Trash2 /> Delete video…
                     </ContextMenuItem>
                   </>
                 )}

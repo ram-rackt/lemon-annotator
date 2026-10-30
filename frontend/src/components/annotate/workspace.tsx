@@ -24,6 +24,7 @@ import { QueueRail, TagRail } from "@/components/annotate/panel-rails";
 import { ShortcutsDialog } from "@/components/annotate/shortcuts-dialog";
 import { type PanelPrefs, TaggingPanel } from "@/components/annotate/tagging-panel";
 import { VideoDetailsDialog } from "@/components/annotate/video-details-dialog";
+import { RemoveVideoDialog } from "@/components/annotate/remove-video-dialog";
 import { VideoQueue } from "@/components/annotate/video-queue";
 import { type PlayerHandle, VideoPlayer } from "@/components/annotate/video-player";
 import { ErrorState } from "@/components/error-state";
@@ -40,6 +41,7 @@ import {
   keys,
   streamUrlQuery,
   useActivity,
+  useRestoreVideo,
   useAnnotation,
   useProject,
   useSaveAnnotation,
@@ -370,6 +372,8 @@ function Workspace({
   const [showRequiredLabels, setShowRequiredLabels] = useState(false);
   const [detailsVideo, setDetailsVideo] = useState<VideoItem | null>(null);
   const [clearVideo, setClearVideo] = useState<VideoItem | null>(null);
+  const [removeVideo, setRemoveVideo] = useState<VideoItem | null>(null);
+  const restoreMut = useRestoreVideo(projectId);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const lastRefresh = useRef<{ key: string; at: number } | null>(null);
 
@@ -908,26 +912,31 @@ function Workspace({
     }
   };
 
+  /**
+   * The saved version of `video` this user has seen: the copy on screen for the open video; otherwise
+   * this tab's own copy if it is newer than the latest heartbeat (e.g. saved here a moment ago), else the
+   * heartbeat. Clearing and deleting send it, and the server refuses if someone saved a newer one since.
+   */
+  const seenRevision = (video: VideoItem) => {
+    const base = baseRef.current;
+    const ownCopy = qc.getQueryData<VideoAnnotation | null>(keys.annotation(projectId, video.key));
+    const ownIsNewer = ownCopy && (!activity || new Date(ownCopy.updated_at) >= new Date(activity.as_of));
+    return video.key === activeKeyRef.current && base?.key === video.key
+      ? base.revision
+      : ownIsNewer
+        ? ownCopy.revision
+        : activity
+          ? (activity.videos[video.key]?.revision ?? null)
+          : undefined;
+  };
+
   const clearAnnotations = async (video: VideoItem) => {
     if (saveMut.isPending) {
       toast.error("A save is in progress. Try again in a moment.");
       throw new Error("save in progress");
     }
     await qc.cancelQueries({ queryKey: keys.annotation(projectId, video.key) });
-    // The saved version this user has seen: the copy on screen for the open video; otherwise this tab's
-    // own copy if it is newer than the latest heartbeat (e.g. saved here a moment ago), else the
-    // heartbeat. The server refuses if someone saved a newer one in the meantime.
-    const base = baseRef.current;
-    const ownCopy = qc.getQueryData<VideoAnnotation | null>(keys.annotation(projectId, video.key));
-    const ownIsNewer = ownCopy && (!activity || new Date(ownCopy.updated_at) >= new Date(activity.as_of));
-    const seen =
-      video.key === activeKeyRef.current && base?.key === video.key
-        ? base.revision
-        : ownIsNewer
-          ? ownCopy.revision
-          : activity
-            ? (activity.videos[video.key]?.revision ?? null)
-            : undefined;
+    const seen = seenRevision(video);
     let movedTo: string | null = null;
     try {
       // Always asked: the queue's status may be a few seconds old.
@@ -974,6 +983,60 @@ function Workspace({
     }
     toast.success(`Cleared annotations for ${video.filename}`, {
       description: movedTo ? `Previous version kept at ${movedTo}` : undefined,
+    });
+  };
+
+  /** "Delete video": out of the queue and export for everyone, annotations cleared, the S3 file kept. */
+  const deleteVideo = async (video: VideoItem) => {
+    if (saveMut.isPending) {
+      toast.error("A save is in progress. Try again in a moment.");
+      throw new Error("save in progress");
+    }
+    await qc.cancelQueries({ queryKey: keys.annotation(projectId, video.key) });
+    try {
+      await api.removeVideo(projectId, video.key, seenRevision(video));
+    } catch (err) {
+      const { title, hint } = errorMessage(err);
+      toast.error(`Couldn't delete the video: ${title}`, { description: hint ?? undefined });
+      if (err instanceof ApiError && err.code === "CLEAR_CONFLICT") {
+        qc.invalidateQueries({ queryKey: keys.annotation(projectId, video.key) });
+        qc.invalidateQueries({ queryKey: ["projects", projectId, "activity"] });
+      }
+      throw err;
+    }
+    // Where to go if it was open: the next video still to do, else its neighbour.
+    const index = videos.findIndex((v) => v.key === video.key);
+    const rest = videos.filter((v) => v.key !== video.key);
+    const next = findNextTodo(videos, video.key) ?? rest[Math.min(index, rest.length - 1)]?.key ?? null;
+
+    qc.setQueryData(keys.annotation(projectId, video.key), null);
+    qc.removeQueries({ queryKey: keys.details(projectId, video.key) });
+    qc.setQueryData<VideoList>(keys.videos(projectId), (prev) =>
+      prev ? { ...prev, videos: prev.videos.filter((v) => v.key !== video.key) } : prev,
+    );
+    qc.invalidateQueries({ queryKey: keys.projects, exact: true });
+    qc.invalidateQueries({ queryKey: keys.project(projectId), exact: true }); // its list of removed videos
+    invalidateReview(qc, projectId);
+    if (video.key === activeKeyRef.current) {
+      // Its unsaved edits go with it: nothing is left to save.
+      pendingSave.register(projectId, null);
+      bumpVersion();
+      savedVersionRef.current = versionRef.current;
+      if (next) doSwitch(next);
+    }
+    toast.success(`Deleted ${video.filename} from the project`, {
+      description: "The file is still in S3. Restore it any time under Settings > General.",
+      action: {
+        label: "Undo",
+        onClick: () =>
+          restoreMut.mutate(video.key, {
+            onSuccess: () => toast.success(`${video.filename} is back in the queue`),
+            onError: (err) => {
+              const { title, hint } = errorMessage(err);
+              toast.error(`Couldn't restore the video: ${title}`, { description: hint ?? undefined });
+            },
+          }),
+      },
     });
   };
 
@@ -1148,6 +1211,7 @@ function Workspace({
             onShowDetails={setDetailsVideo}
             onOpenVideo={openVideoInTab}
             onClear={setClearVideo}
+            onRemove={setRemoveVideo}
             storageKey={`lemon.queue.${projectId}`}
             presence={presence}
             limited={coachView}
@@ -1370,6 +1434,13 @@ function Workspace({
         eventCount={clearVideo?.key === activeKey && ready ? events.length : (clearVideo?.event_count ?? 0)}
         onOpenChange={(open) => !open && setClearVideo(null)}
         onConfirm={clearAnnotations}
+      />
+
+      <RemoveVideoDialog
+        video={removeVideo}
+        eventCount={removeVideo?.key === activeKey && ready ? events.length : (removeVideo?.event_count ?? 0)}
+        onOpenChange={(open) => !open && setRemoveVideo(null)}
+        onConfirm={deleteVideo}
       />
     </div>
   );

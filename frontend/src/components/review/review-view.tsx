@@ -1,12 +1,11 @@
 "use client";
 
-import { ArrowRight, CheckCheck, CheckCircle2, CircleDot, Flag, RefreshCw, Settings2, Tags } from "lucide-react";
+import { ArrowRight, CheckCheck, Flag, Play, RefreshCw, Settings2, Tags } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { toast } from "sonner";
 
 import { ErrorState } from "@/components/error-state";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -16,8 +15,8 @@ import { useFinishReview, useProject, useReview } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
 import { errorMessage } from "@/lib/api";
 import { formatRelative, formatTime } from "@/lib/format";
-import { formatValue, isEmptyValue, reviewField, reviewFieldOptions, videoFields } from "@/lib/schema";
-import type { LabelSchema, Project, ReviewVideo } from "@/lib/types";
+import { reviewField, reviewFieldOptions } from "@/lib/schema";
+import type { Project, ReviewVideo } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** Every video whose coach-review checkbox (chosen in Settings > General) is ticked. */
@@ -69,7 +68,7 @@ export function ReviewView() {
         <ul className="divide-y overflow-hidden rounded-xl border">
           {list.videos.map((v) => (
             <li key={v.key}>
-              <ReviewRow projectId={projectId} video={v} schema={project.label_schema} reviewKey={field.key} />
+              <ReviewRow projectId={projectId} video={v} />
             </li>
           ))}
         </ul>
@@ -120,20 +119,11 @@ export function ReviewView() {
   );
 }
 
-export function ReviewRow({
-  projectId,
-  video,
-  schema,
-  reviewKey,
-}: {
-  projectId: string;
-  video: ReviewVideo;
-  schema: LabelSchema;
-  reviewKey: string;
-}) {
-  const folder = video.key.includes("/") ? video.key.slice(0, video.key.lastIndexOf("/") + 1) : "";
-  // The other whole-video answers give the coach context; the review flag itself is implied.
-  const answers = videoFields(schema).filter((f) => f.key !== reviewKey && !isEmptyValue(video.labels[f.key]));
+/** One flagged video: its name, where it sits (last folder only), length and when it was last updated. */
+export function ReviewRow({ projectId, video }: { projectId: string; video: ReviewVideo }) {
+  const folders = video.key.split("/").slice(0, -1);
+  // Just the nearest folder: enough to tell same-named clips apart (the full path is in the tooltip).
+  const folder = folders.at(-1);
   const finish = useFinishReview(projectId);
 
   const done = () =>
@@ -149,49 +139,28 @@ export function ReviewRow({
     <div className="flex items-center transition-colors hover:bg-muted/40">
       <Link
         href={`/projects/${projectId}?v=${encodeURIComponent(video.key)}`}
-        className="group flex min-w-0 flex-1 items-center gap-4 py-3.5 pl-4 focus-visible:bg-muted/40 focus-visible:outline-none"
-        title="Open in Annotate to review and make changes"
+        className="group flex min-w-0 flex-1 items-center gap-3.5 py-3 pl-4 focus-visible:bg-muted/40 focus-visible:outline-none"
+        title={`${video.key}\nOpen to review and make changes`}
       >
-        {video.status === "completed" ? (
-          <CheckCircle2 className="size-[18px] shrink-0 text-emerald-500" aria-label="Completed" />
-        ) : (
-          <CircleDot className="size-[18px] shrink-0 text-amber-500" aria-label="In progress" />
-        )}
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex min-w-0 items-baseline gap-2">
-            <span className="truncate text-sm font-medium" title={video.key}>
-              {video.filename}
-            </span>
-            {folder && (
-              <span className="hidden truncate font-mono text-xs text-muted-foreground sm:inline">{folder}</span>
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-300">
+          <Play className="size-4" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium">{video.filename}</div>
+          <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            {folder && <span className="truncate">{folder}</span>}
+            {folder && video.duration_seconds != null && <span aria-hidden>·</span>}
+            {video.duration_seconds != null && (
+              <span className="shrink-0 tabular-nums">{formatTime(video.duration_seconds, { ms: false })}</span>
             )}
           </div>
-          {answers.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {answers.map((f) => (
-                <Badge key={f.key} variant="secondary" className="h-auto min-h-5 rounded font-normal whitespace-normal">
-                  {f.type === "checkbox" ? (
-                    f.label
-                  ) : (
-                    <>
-                      <span className="text-muted-foreground">{f.label}:</span> {formatValue(video.labels[f.key])}
-                    </>
-                  )}
-                </Badge>
-              ))}
-            </div>
-          )}
         </div>
-        <div className="hidden shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground sm:flex">
-          <span className="tabular-nums">
-            {video.event_count} event{video.event_count === 1 ? "" : "s"}
-            {video.duration_seconds != null && ` · ${formatTime(video.duration_seconds, { ms: false })}`}
-          </span>
-          <span title={new Date(video.annotated_at).toLocaleString()}>
-            Saved {video.updated_by ? `by ${video.updated_by} ` : ""}
-            {formatRelative(video.annotated_at)}
-          </span>
-        </div>
+        <span
+          className="hidden shrink-0 text-xs text-muted-foreground sm:inline"
+          title={new Date(video.annotated_at).toLocaleString()}
+        >
+          {formatRelative(video.annotated_at)}
+        </span>
         <ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
       </Link>
       <div className="shrink-0 px-4">

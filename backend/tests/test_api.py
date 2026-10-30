@@ -362,3 +362,41 @@ def test_coach_review_across_projects(any_client, any_project):
 
     client.post(f"/api/projects/{flagged}/review/done", params={"key": "clips/rally_001.mp4"})
     assert all(p["videos"] == [] for p in client.get("/api/review").json())
+
+
+def test_remove_and_restore_a_video(any_client, any_project):
+    client, project = any_client, any_project
+    key = "clips/rally_001.mp4"
+    saved = client.put(f"/api/projects/{project}/annotations", params={"key": key},
+                       json={"events": [{"id": "a", "timestamp": 1.0}], "status": "completed"})
+    assert saved.status_code == 200, saved.text
+    saved = saved.json()
+    queue = lambda: [v["key"] for v in client.get(f"/api/projects/{project}/videos").json()["videos"]]  # noqa: E731
+    assert key in queue()
+
+    # Refused when someone saved a newer version than the one this user saw.
+    stale = client.delete(f"/api/projects/{project}/videos", params={"key": key, "revision": "old"})
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "CLEAR_CONFLICT"
+    assert key in queue()
+
+    res = client.delete(f"/api/projects/{project}/videos", params={"key": key, "revision": saved["revision"]})
+    assert res.status_code == 200 and res.json()["cleared"] is True
+    # Gone from the queue, its count, the export and the progress; annotations cleared; listed for restoring.
+    listed = client.get(f"/api/projects/{project}/videos").json()
+    assert key not in [v["key"] for v in listed["videos"]] and listed["sync"]["video_count"] == 2
+    exported = client.post(f"/api/projects/{project}/export").json()["data"]
+    assert key not in [v["s3_key"] for v in exported["videos"]]
+    assert client.get(f"/api/projects/{project}/annotations", params={"key": key}).json() is None
+    info = client.get(f"/api/projects/{project}").json()
+    assert [r["key"] for r in info["removed_videos"]] == [key] and info["stats"]["completed"] == 0
+    # Someone still on it can't save to it.
+    late = client.put(f"/api/projects/{project}/annotations", params={"key": key}, json={"events": []})
+    assert late.status_code == 404 and late.json()["error"]["code"] == "VIDEO_REMOVED"
+    # Removing twice is harmless.
+    assert client.delete(f"/api/projects/{project}/videos", params={"key": key}).status_code == 200
+    assert len(client.get(f"/api/projects/{project}").json()["removed_videos"]) == 1
+
+    restored = client.post(f"/api/projects/{project}/videos/restore", params={"key": key})
+    assert restored.status_code == 200 and restored.json()["removed_videos"] == []
+    assert key in queue()
+    assert client.get(f"/api/projects/{project}/annotations", params={"key": key}).json() is None  # still cleared

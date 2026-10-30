@@ -69,7 +69,7 @@ async function refreshSignIn(): Promise<boolean> {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit, retried = false): Promise<T> {
   const token = await accessToken();
   let res: Response;
   try {

@@ -7,6 +7,7 @@ import { useState } from "react";
 import { AuthGate } from "@/components/auth/auth-gate";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Pets } from "@/features/pets/pets";
 import { ApiError } from "@/lib/api";
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -33,7 +34,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider delayDuration={300}>
-          <AuthGate>{children}</AuthGate>
+          <AuthGate>
+            {children}
+            <Pets />
+          </AuthGate>
           <Toaster position="bottom-center" closeButton />
         </TooltipProvider>
       </QueryClientProvider>

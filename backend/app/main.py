@@ -14,7 +14,7 @@ from .config import get_settings
 from .db_store import DatabaseStore
 from .deps import get_store
 from .errors import AppError
-from .routers import export, projects, videos
+from .routers import export, projects, saved_keys, videos
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("lemon")
@@ -145,3 +145,4 @@ app.include_router(projects.router, dependencies=signed_in)
 app.include_router(videos.router, dependencies=in_project)
 app.include_router(export.router, dependencies=in_project)
 app.include_router(videos.review_router, dependencies=signed_in)
+app.include_router(saved_keys.router, dependencies=signed_in)

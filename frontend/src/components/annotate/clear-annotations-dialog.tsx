@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { VideoNames } from "@/components/annotate/remove-video-dialog";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -15,37 +16,52 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import type { VideoItem } from "@/lib/types";
 
+/** Confirms clearing the annotations of one or more videos (right-click, or a selection in the queue). */
 export function ClearAnnotationsDialog({
-  video,
+  videos,
   eventCount,
   onOpenChange,
   onConfirm,
 }: {
-  video: VideoItem | null;
-  /** Events that will be removed (saved, plus unsaved ones when this is the active video). */
+  videos: VideoItem[] | null;
+  /** Events that will be removed (saved, plus unsaved ones on the active video). */
   eventCount: number;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (video: VideoItem) => Promise<void>;
+  onConfirm: (videos: VideoItem[]) => Promise<void>;
 }) {
   const [pending, setPending] = useState(false);
-  const saved = video ? video.status !== "not_started" : false;
+  const list = videos ?? [];
+  const many = list.length > 1;
+  const saved = list.some((v) => v.status !== "not_started");
+  const events = `${eventCount} event${eventCount === 1 ? "" : "s"}`;
 
   return (
-    <AlertDialog open={video !== null} onOpenChange={(open) => !pending && onOpenChange(open)}>
+    <AlertDialog open={videos !== null} onOpenChange={(open) => !pending && onOpenChange(open)}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Clear annotations?</AlertDialogTitle>
+          <AlertDialogTitle>
+            {many ? `Clear annotations of ${list.length} videos?` : "Clear annotations?"}
+          </AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-2">
-              <p>
-                <span className="font-medium break-all text-foreground">{video?.filename}</span> will go back to{" "}
-                <span className="font-medium text-foreground">not started</span> and its {eventCount} event
-                {eventCount === 1 ? "" : "s"} will be removed.
-              </p>
+              {many ? (
+                <>
+                  <p>
+                    These videos will go back to <span className="font-medium text-foreground">not started</span>, and
+                    their {events} will be removed:
+                  </p>
+                  <VideoNames videos={list} />
+                </>
+              ) : (
+                <p>
+                  <span className="font-medium break-all text-foreground">{list[0]?.filename}</span> will go back to{" "}
+                  <span className="font-medium text-foreground">not started</span> and its {events} will be removed.
+                </p>
+              )}
               {saved && (
                 <p>
-                  This applies for everyone working on the project. The saved copy is kept in Lemon&apos;s trash, so it
-                  can still be recovered. The video in S3 is not touched.
+                  This applies for everyone working on the project. The saved copies are kept in Lemon&apos;s trash, so
+                  they can still be recovered. The videos in S3 are not touched.
                 </p>
               )}
             </div>
@@ -57,10 +73,10 @@ export function ClearAnnotationsDialog({
             disabled={pending}
             className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/90 dark:hover:bg-destructive"
             onClick={async () => {
-              if (!video) return;
+              if (!list.length) return;
               setPending(true);
               try {
-                await onConfirm(video);
+                await onConfirm(list);
                 onOpenChange(false);
               } catch {
                 /* error toast already shown; keep the dialog open so the user can retry */

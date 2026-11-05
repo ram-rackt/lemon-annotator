@@ -33,7 +33,7 @@ export function SyncPanel({ project, unsavedChanges }: { project: Project; unsav
 
   const run = () =>
     sync.mutate(undefined, {
-      onSuccess: ({ sync: s }) => toast.success(`Synced · ${summary(s)}`),
+      onSuccess: ({ sync: s }) => toast.success(s ? `Synced · ${summary(s)}` : "Synced"),
       onError: (err) => {
         const { title, hint } = errorMessage(err);
         toast.error(`Sync failed: ${title}`, { description: hint ?? undefined });

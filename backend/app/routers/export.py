@@ -3,14 +3,13 @@ import posixpath
 
 from fastapi import APIRouter, Depends, Query
 
-from .. import __version__, s3_service
+from .. import __version__
 from ..access import project_access
 from ..auth import User, current_user
-from ..config import get_settings
 from ..deps import Store, get_store
-from ..errors import S3Error
 from ..models import ExportResult, Project, VideoAnnotation, utcnow
 from ..storage import json_default
+from .videos import synced_list
 
 router = APIRouter(prefix="/api/projects/{project_id}", tags=["export"])
 
@@ -69,15 +68,19 @@ def export_project(
         )
     field_labels = {f.key: f.label for f in project.label_schema.fields}
 
+    # Unannotated videos: the ones the latest sync found, like the queue (the bucket isn't listed again).
     bucket_keys: list[str] = []
     if include_unannotated and project.storage.is_configured:
-        try:
-            objects, truncated = s3_service.list_videos(project.storage, get_settings().max_list_keys)
-            bucket_keys = [o.key for o in objects if o.key not in removed]
-            if truncated:
-                warnings.append("Bucket listing was truncated; some unannotated videos are not listed.")
-        except S3Error as exc:
-            warnings.append(f"Could not list the bucket ({exc.message}); exported annotated videos only.")
+        synced = synced_list(project, store)
+        if synced is None:
+            warnings.append(
+                "The storage hasn't been synced yet, so only annotated videos are included. "
+                "Sync it under Settings > Cloud storage."
+            )
+        else:
+            bucket_keys = [v.key for v in synced.videos if v.key not in removed]
+            if synced.truncated:
+                warnings.append("The latest sync stopped at the scan limit; some unannotated videos are not listed.")
 
     videos = [_video_entry(annotations[k]) for k in sorted(annotations, key=str.lower)]
     for key in bucket_keys:

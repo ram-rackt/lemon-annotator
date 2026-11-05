@@ -183,7 +183,13 @@ those values to go back to a private, local-only Lemon (`./app_data`).
    ```
 
 2. In the project's **Settings > Cloud storage**, enter the access key, region, bucket and folder prefix
-   (pasting `s3://bucket/folder/` fills both), then **Test connection**. No bucket CORS setup is needed.
+   (pasting `s3://bucket/folder/` fills both), then **Test connection**. No bucket CORS setup is needed. The region
+   starts at `ap-south-1` (Mumbai); choose another from the list, or **Other…** to type any region code.
+   Saving remembers the key pair **for your account only**: in your other projects, pick it under **Saved keys**
+   instead of typing it again (the secret is never sent back to the browser; **forget this key** removes it).
+   Then press **Sync storage** to load the videos. Lemon lists the bucket only when someone syncs (this button, or
+   the ↻ button on the queue); opening a project or exporting uses the latest sync. Sync again after adding or
+   removing videos in S3.
 
 - Leave the keys empty to use the standard AWS credential chain (env vars, `AWS_PROFILE`, `~/.aws/credentials`, SSO).
 - For MinIO, Cloudflare R2 or Wasabi, set the custom endpoint URL under **Advanced**.
@@ -207,7 +213,12 @@ those values to go back to a private, local-only Lemon (`./app_data`).
 Right-click a video in the queue to view its details, copy its S3 URI, open it in a new tab, clear its
 annotations, or **delete** it. Deleting asks for confirmation, then takes the video out of the queue and the export for
 everyone in the workspace and clears its annotations; the file stays in S3. **Undo** on the message, or **Restore**
-under **Settings > General > Deleted videos**, puts it back. To jump to another project from any page, use the search box in the top bar (`Ctrl` + `K`). Once a project has annotations, its bucket can't be changed; create a new project instead.
+under **Settings > General > Deleted videos**, puts it back.
+
+To clear or delete several videos at once, press the select button (☑) at the top of the queue, or `Ctrl`+click a
+video (`Shift`+click selects a range). Tick the videos (the box at the top selects everything shown under the current
+filter), then use **Clear** or **Delete** in the bar above the list, or right-click one of the selected videos. Both
+ask for confirmation first. A video someone else saved after you last saw it is left alone, and you're told which. To jump to another project from any page, use the search box in the top bar (`Ctrl` + `K`). Once a project has annotations, its bucket can't be changed; create a new project instead.
 
 ### Coach review
 
@@ -340,7 +351,7 @@ render.yaml        Render Blueprint for the API
 | "Access denied" | Attach the IAM policy above |
 | "Your computer clock is out of sync" | Turn on automatic time sync (AWS signatures depend on it) |
 | Video won't play but the connection works | It's likely HEVC/ProRes. Re-encode: `ffmpeg -i in.mov -c:v libx264 -pix_fmt yuv420p -movflags +faststart out.mp4` |
-| Video missing from the queue | Only `.mp4`/`.mov` under the prefix are listed. Use the queue's refresh button |
+| Video missing from the queue | Only `.mp4`/`.mov` under the prefix are listed, as of the latest sync. Press ↻ on the queue (or **Sync storage**) |
 | "The Lemon API did not respond" | Locally: start the backend, or fix `BACKEND_URL`. Hosted: Render is waking up; wait a minute |
 | "Could not reach the database" | Check `LEMON_DATABASE_URL` (Session pooler string) and that the Supabase project isn't paused |
 | `failed to resolve host 'db.<ref>.supabase.co'` | That's the IPv6-only direct connection; use the Session pooler string |

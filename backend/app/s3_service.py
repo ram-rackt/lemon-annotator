@@ -23,7 +23,7 @@ from botocore.exceptions import (
 )
 
 from .errors import S3Error
-from .models import VIDEO_EXTENSIONS, StorageConfig, utcnow
+from .models import DEFAULT_REGION, VIDEO_EXTENSIONS, StorageConfig, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ def get_client(cfg: StorageConfig) -> BaseClient:
         client = _clients.get(key)
         if client:
             return client
-        kwargs: dict = {"region_name": cfg.region or "us-east-1"}
+        kwargs: dict = {"region_name": cfg.region or DEFAULT_REGION}
         if cfg.access_key_id or cfg.secret_access_key:
             if not (cfg.access_key_id and cfg.secret_access_key):
                 raise S3Error(
@@ -79,7 +79,7 @@ def get_client(cfg: StorageConfig) -> BaseClient:
             config = _BOTO_CONFIG.merge(Config(s3={"addressing_style": "path"}))
         else:
             # Regional virtual-hosted endpoint: presigned URLs never hit a 307 redirect.
-            region = cfg.region or "us-east-1"
+            region = cfg.region or DEFAULT_REGION
             suffix = "amazonaws.com.cn" if region.startswith("cn-") else "amazonaws.com"  # AWS China partition
             kwargs["endpoint_url"] = f"https://s3.{region}.{suffix}"
             # Dotted bucket names break TLS with virtual-hosted URLs.

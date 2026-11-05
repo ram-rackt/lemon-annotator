@@ -2,6 +2,7 @@
 
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   Circle,
   CircleDot,
@@ -9,15 +10,18 @@ import {
   Eraser,
   ExternalLink,
   Info,
+  ListChecks,
   PanelLeftClose,
   Play,
   RefreshCw,
   Search,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -59,13 +63,19 @@ interface Props {
   activeEventCount: number;
   onShowDetails: (video: VideoItem) => void;
   onOpenVideo: (video: VideoItem) => void;
-  onClear: (video: VideoItem) => void;
-  /** Take the video out of the project (asks for confirmation first). */
-  onRemove: (video: VideoItem) => void;
+  /** Clear the annotations of these videos (asks for confirmation first). */
+  onClear: (videos: VideoItem[]) => void;
+  /** Take these videos out of the project (asks for confirmation first). */
+  onRemove: (videos: VideoItem[]) => void;
+  /** Keys of the selected videos while selecting (several at once); null when not selecting. */
+  selection: Set<string> | null;
+  onSelectionChange: (selection: Set<string> | null) => void;
   /** localStorage key under which the filter and search are remembered (per project). */
   storageKey: string;
   /** Other people with this project open (hosted setup). */
   presence: PresenceEntry[];
+  /** The storage was never synced: only annotated videos are listed until someone syncs. */
+  unsynced?: boolean;
   /** A coach from another workspace: only flagged videos, no storage details or clearing. */
   limited?: boolean;
 }
@@ -98,8 +108,11 @@ export function VideoQueue({
   onOpenVideo,
   onClear,
   onRemove,
+  selection,
+  onSelectionChange,
   storageKey,
   presence,
+  unsynced = false,
   limited = false,
 }: Props) {
   const viewers = useMemo(() => {
@@ -140,6 +153,45 @@ export function VideoQueue({
     done: completed,
   };
 
+  /* Selecting several videos (to clear or delete them together). A coach can't do either. */
+  const selecting = selection !== null && !limited;
+  const selected = useMemo(() => (selection ? videos.filter((v) => selection.has(v.key)) : []), [videos, selection]);
+  const allShownSelected = visible.length > 0 && visible.every((v) => selection?.has(v.key));
+  // Where a Shift+click range starts: the last video clicked while selecting (else the open one).
+  const anchorRef = useRef<string | null>(null);
+  const hasAnnotations = (v: VideoItem) =>
+    v.status !== "not_started" || v.event_count > 0 || (v.key === activeKey && activeEventCount > 0);
+
+  const toggle = (key: string, range: boolean) => {
+    const next = new Set(selection ?? []);
+    const keys = visible.map((v) => v.key);
+    const from = keys.indexOf(anchorRef.current ?? activeKey ?? "");
+    const to = keys.indexOf(key);
+    if (range && from >= 0 && to >= 0) {
+      for (const k of keys.slice(Math.min(from, to), Math.max(from, to) + 1)) next.add(k);
+    } else if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    anchorRef.current = key;
+    onSelectionChange(next);
+  };
+
+  const toggleAllShown = () => {
+    const next = new Set(selection ?? []);
+    for (const v of visible) {
+      if (allShownSelected) next.delete(v.key);
+      else next.add(v.key);
+    }
+    onSelectionChange(next);
+  };
+
+  const stopSelecting = () => {
+    anchorRef.current = null;
+    onSelectionChange(null);
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="space-y-4 border-b px-4 py-4">
@@ -148,6 +200,25 @@ export function VideoQueue({
             {limited ? "Flagged for review" : "Dataset queue"}
           </h2>
           <div className="flex items-center gap-0.5">
+            {!limited && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => (selecting ? stopSelecting() : onSelectionChange(new Set()))}
+                    aria-label={selecting ? "Stop selecting" : "Select videos"}
+                    aria-pressed={selecting}
+                    className={cn(selecting && "bg-accent text-accent-foreground")}
+                  >
+                    <ListChecks />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {selecting ? "Stop selecting" : "Select videos to clear or delete them together (or Ctrl+click one)"}
+                </TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -155,12 +226,16 @@ export function VideoQueue({
                   size="icon-xs"
                   onClick={onRefresh}
                   disabled={refreshing}
-                  aria-label={limited ? "Refresh" : "Refresh from S3"}
+                  aria-label={limited ? "Refresh" : "Sync storage"}
                 >
                   <RefreshCw className={cn(refreshing && "animate-spin")} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{limited ? "Refresh the flagged videos" : "Re-scan the bucket"}</TooltipContent>
+              <TooltipContent>
+                {limited
+                  ? "Refresh the flagged videos"
+                  : "Sync storage: re-scan the bucket for added or removed videos"}
+              </TooltipContent>
             </Tooltip>
             {onCollapse && (
               <Tooltip>
@@ -188,6 +263,11 @@ export function VideoQueue({
             <span>{pct}%</span>
           </div>
           <Progress value={pct} className="h-1.5 [&>div]:bg-emerald-500" />
+          {unsynced && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              Not synced yet: only annotated videos are listed. Sync (↻) to load the rest.
+            </p>
+          )}
           {presence.length > 0 && (
             <p
               className="truncate text-xs text-sky-700 dark:text-sky-300"
@@ -224,6 +304,45 @@ export function VideoQueue({
         </div>
       </div>
 
+      {selecting && (
+        <div className="flex items-center gap-2 border-b bg-muted/40 py-2 pr-2 pl-[1.35rem]">
+          <Checkbox
+            checked={allShownSelected}
+            onCheckedChange={toggleAllShown}
+            disabled={visible.length === 0}
+            aria-label={allShownSelected ? "Unselect the videos shown" : "Select all videos shown"}
+          />
+          <span className="min-w-0 flex-1 truncate text-[13px] tabular-nums">
+            {selected.length ? `${selected.length} selected` : "Select videos"}
+          </span>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={!selected.some(hasAnnotations)}
+            onClick={() => onClear(selected.filter(hasAnnotations))}
+          >
+            <Eraser /> Clear
+          </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={selected.length === 0}
+            onClick={() => onRemove(selected)}
+            className="text-destructive hover:text-destructive"
+          >
+            <Trash2 /> Delete
+          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="icon-xs" onClick={stopSelecting} aria-label="Stop selecting">
+                <X />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Stop selecting</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2.5" aria-label="Videos">
         {visible.length === 0 && (
           <p className="p-6 text-center text-sm text-muted-foreground">No videos match this filter.</p>
@@ -235,6 +354,9 @@ export function VideoQueue({
           const canClear = v.status !== "not_started" || v.event_count > 0 || (active && activeEventCount > 0);
           const here = viewers.get(v.key) ?? [];
           const savedBy = v.updated_by ? ` · Saved by ${v.updated_by} ${formatRelative(v.annotated_at)}` : "";
+          const isSelected = selecting && selection.has(v.key);
+          // Right-clicking one of several selected videos offers to act on the whole selection.
+          const bulk = isSelected && selected.length > 1;
           return (
             <ContextMenu key={v.key}>
               <ContextMenuTrigger asChild>
@@ -242,13 +364,31 @@ export function VideoQueue({
                   ref={active ? activeRef : undefined}
                   type="button"
                   aria-current={active ? "true" : undefined}
-                  onClick={() => onSelect(v.key)}
-                  title={`${v.key}${savedBy} · Right-click for options`}
+                  aria-pressed={selecting ? isSelected : undefined}
+                  onClick={(e) => {
+                    // While selecting, or with Ctrl / Cmd / Shift held, a click selects instead of opening.
+                    if (!limited && (selecting || e.ctrlKey || e.metaKey || e.shiftKey)) {
+                      e.preventDefault();
+                      toggle(v.key, e.shiftKey);
+                      return;
+                    }
+                    onSelect(v.key);
+                  }}
+                  title={
+                    selecting
+                      ? `${v.key} · Click to select, Shift+click to select a range`
+                      : `${v.key}${savedBy} · Right-click for options`
+                  }
                   className={cn(
-                    "group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors [content-visibility:auto] [contain-intrinsic-size:auto_56px]",
-                    active ? "bg-accent text-accent-foreground" : "hover:bg-muted/60 data-[state=open]:bg-muted/60",
+                    "group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors select-none [content-visibility:auto] [contain-intrinsic-size:auto_56px]",
+                    isSelected
+                      ? "bg-primary/10 ring-1 ring-primary/30 ring-inset"
+                      : active
+                        ? "bg-accent text-accent-foreground"
+                        : "hover:bg-muted/60 data-[state=open]:bg-muted/60",
                   )}
                 >
+                  {selecting && <SelectBox checked={isSelected} />}
                   <StatusIcon video={v} />
                   <div className="min-w-0 flex-1 space-y-0.5">
                     <div
@@ -314,12 +454,29 @@ export function VideoQueue({
                 {!limited && (
                   <>
                     <ContextMenuSeparator />
-                    <ContextMenuItem variant="destructive" onSelect={() => onClear(v)} disabled={!canClear}>
-                      <Eraser /> Clear annotations…
-                    </ContextMenuItem>
-                    <ContextMenuItem variant="destructive" onSelect={() => onRemove(v)}>
-                      <Trash2 /> Delete video…
-                    </ContextMenuItem>
+                    {bulk ? (
+                      <>
+                        <ContextMenuItem
+                          variant="destructive"
+                          onSelect={() => onClear(selected.filter(hasAnnotations))}
+                          disabled={!selected.some(hasAnnotations)}
+                        >
+                          <Eraser /> Clear annotations of {selected.length} videos…
+                        </ContextMenuItem>
+                        <ContextMenuItem variant="destructive" onSelect={() => onRemove(selected)}>
+                          <Trash2 /> Delete {selected.length} videos…
+                        </ContextMenuItem>
+                      </>
+                    ) : (
+                      <>
+                        <ContextMenuItem variant="destructive" onSelect={() => onClear([v])} disabled={!canClear}>
+                          <Eraser /> Clear annotations…
+                        </ContextMenuItem>
+                        <ContextMenuItem variant="destructive" onSelect={() => onRemove([v])}>
+                          <Trash2 /> Delete video…
+                        </ContextMenuItem>
+                      </>
+                    )}
                   </>
                 )}
               </ContextMenuContent>
@@ -333,6 +490,21 @@ export function VideoQueue({
         )}
       </nav>
     </div>
+  );
+}
+
+/** A checkbox look-alike for rows (each row is already a button, and buttons can't contain buttons). */
+function SelectBox({ checked }: { checked: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "grid size-4 shrink-0 place-items-center rounded-[4px] border transition-colors",
+        checked ? "border-primary bg-primary text-primary-foreground" : "border-input dark:bg-input/30",
+      )}
+    >
+      {checked && <Check className="size-3.5" />}
+    </span>
   );
 }
 

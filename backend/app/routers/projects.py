@@ -14,6 +14,7 @@ from ..models import (
     ProjectUpdate,
     StorageUpdate,
 )
+from .saved_keys import remember_key, with_saved_secret
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -40,16 +41,22 @@ def get_project(
 
 # Changes: members only (project_access refuses everyone else).
 @router.patch("/{project_id}", response_model=ProjectPublic, dependencies=[Depends(project_access)])
-def update_project(project_id: str, body: ProjectUpdate, store: Store = Depends(get_store)):
+def update_project(
+    project_id: str,
+    body: ProjectUpdate,
+    user: User = Depends(current_user),
+    store: Store = Depends(get_store),
+):
+    storage = with_saved_secret(body.storage, user, store) if body.storage is not None else None
     with store.lock(project_id):
         project = store.get(project_id)
         if body.name is not None:
             project.name = body.name.strip()
         if body.description is not None:
             project.description = body.description.strip()
-        if body.storage is not None:
+        if storage is not None:
             before = (project.storage.bucket, project.storage.normalized_prefix)
-            new_storage = body.storage.apply_to(project.storage)
+            new_storage = storage.apply_to(project.storage)
             # Annotations are stored per S3 key; mixing two buckets in one project would attach
             # one bucket's labels to same-named videos in the other.
             if project.storage.bucket and new_storage.bucket != project.storage.bucket:
@@ -79,6 +86,8 @@ def update_project(project_id: str, body: ProjectUpdate, store: Store = Depends(
                     )
             project.settings = body.settings
         store.save(project)
+    if storage is not None:
+        remember_key(storage, user, store)  # so this user can pick it again in other projects
     return to_public(project, store)
 
 
@@ -89,7 +98,12 @@ def delete_project(project_id: str, user: User = Depends(current_user), store: S
 
 
 @router.post("/{project_id}/storage/test", response_model=ConnectionTestResult)
-def test_storage(body: StorageUpdate | None = None, project: Project = Depends(project_access)):
+def test_storage(
+    body: StorageUpdate | None = None,
+    user: User = Depends(current_user),
+    project: Project = Depends(project_access),
+    store: Store = Depends(get_store),
+):
     """Test the saved settings, or unsaved edits merged over them when a body is sent."""
-    cfg = body.apply_to(project.storage) if body else project.storage
+    cfg = with_saved_secret(body, user, store).apply_to(project.storage) if body else project.storage
     return s3_service.test_connection(cfg, get_settings().max_list_keys)

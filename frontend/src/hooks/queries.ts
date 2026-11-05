@@ -29,6 +29,8 @@ export const keys = {
   review: (id: string) => ["projects", id, "review"] as const,
   /** Every project's flagged videos (the dashboard's Coach review tab). */
   reviewAll: ["review"] as const,
+  /** The signed-in user's saved AWS keys. */
+  savedKeys: ["saved-keys"] as const,
 };
 
 /** A video's flag (or a project's review field) may have changed: refresh both review lists. */
@@ -45,11 +47,11 @@ export function useProject(id: string) {
   return useQuery({ queryKey: keys.project(id), queryFn: () => api.getProject(id), enabled: useSignedIn() });
 }
 
-/** Put a removed video back in the queue. */
-export function useRestoreVideo(id: string) {
+/** Put deleted videos back in the queue. */
+export function useRestoreVideos(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (key: string) => api.restoreVideo(id, key),
+    mutationFn: (keys: string[]) => api.restoreVideos(id, keys),
     onSuccess: (project: Project) => {
       qc.setQueryData(keys.project(id), project);
       qc.invalidateQueries({ queryKey: keys.projects, exact: true });
@@ -68,6 +70,7 @@ export function useUpdateProject(id: string) {
       invalidateReview(qc, id);
       if (body.storage || body.settings) qc.invalidateQueries({ queryKey: keys.videos(id) });
       if (body.storage) {
+        qc.invalidateQueries({ queryKey: keys.savedKeys }); // the key pair just used is remembered
         // Presigned URLs and object details were made for the old bucket / credentials.
         qc.removeQueries({ queryKey: ["projects", id, "stream-url"] });
         qc.removeQueries({ queryKey: ["projects", id, "details"] });
@@ -76,29 +79,41 @@ export function useUpdateProject(id: string) {
   });
 }
 
-/** Every listing is a sync on the server; mirror its result into the project so Settings and the
- * dashboard show the same numbers as the queue. */
+/** AWS keys this user saved before, to fill in again (only their IDs come to the browser). */
+export function useSavedKeys() {
+  return useQuery({ queryKey: keys.savedKeys, queryFn: api.savedKeys, enabled: useSignedIn() });
+}
+
+export function useForgetSavedKey() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (accessKeyId: string) => api.forgetSavedKey(accessKeyId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: keys.savedKeys }),
+  });
+}
+
+/** After a sync, mirror its result into the project so Settings and the dashboard show the same numbers
+ * as the queue. */
 function applySync(qc: QueryClient, id: string, list: VideoList) {
-  qc.setQueryData<Project>(keys.project(id), (p) => (p ? { ...p, last_sync: list.sync } : p));
+  if (!list.sync) return;
+  const sync = list.sync;
+  qc.setQueryData<Project>(keys.project(id), (p) => (p ? { ...p, last_sync: sync } : p));
   qc.invalidateQueries({ queryKey: keys.projects, exact: true });
 }
 
+/** The queue, built on the server from the latest sync (reading it never lists the bucket). */
 export function useVideos(id: string, enabled: boolean) {
-  const qc = useQueryClient();
   const signedIn = useSignedIn();
   return useQuery({
     queryKey: keys.videos(id),
-    queryFn: async () => {
-      const list = await api.listVideos(id);
-      applySync(qc, id, list);
-      return list;
-    },
+    queryFn: () => api.listVideos(id),
     enabled: enabled && signedIn,
     staleTime: 5 * 60_000,
   });
 }
 
-/** "Sync storage": re-read the bucket now and refresh the queue with the result. */
+/** "Sync storage": re-read the bucket now and refresh the queue with the result. The only thing that lists
+ * the bucket: the queue itself is built from the latest sync. */
 export function useSyncStorage(id: string) {
   const qc = useQueryClient();
   return useMutation({

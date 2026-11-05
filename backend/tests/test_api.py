@@ -222,8 +222,9 @@ def test_sync_counts_new_videos(client, project):
 
     import boto3
 
-    first = client.post(f"/api/projects/{project}/sync").json()["sync"]
-    assert first["video_count"] == 3 and first["new_count"] is None  # first sync of this folder
+    # The project was synced once when it was set up: the first sync of this folder.
+    first = client.get(f"/api/projects/{project}").json()["last_sync"]
+    assert first["video_count"] == 3 and first["new_count"] is None
     assert first["total_bytes"] == 3 * 16
 
     time.sleep(1.1)  # S3 LastModified has one-second precision
@@ -400,3 +401,111 @@ def test_remove_and_restore_a_video(any_client, any_project):
     assert restored.status_code == 200 and restored.json()["removed_videos"] == []
     assert key in queue()
     assert client.get(f"/api/projects/{project}/annotations", params={"key": key}).json() is None  # still cleared
+
+
+def test_clear_and_delete_several_videos(any_client, any_project):
+    client, project = any_client, any_project
+    a, b, c = "clips/rally_001.mp4", "clips/serve_003.mov", "clips/set2/RALLY_002.MP4"
+    saved = {}
+    for key in (a, b, c):
+        res = client.put(f"/api/projects/{project}/annotations", params={"key": key},
+                         json={"events": [{"id": "e1", "timestamp": 1.0}]})
+        assert res.status_code == 200, res.text
+        saved[key] = res.json()["revision"]
+    queue = lambda: {v["key"]: v for v in client.get(f"/api/projects/{project}/videos").json()["videos"]}  # noqa: E731
+
+    # Clear two: one still as seen, one saved by someone else since (skipped and reported), plus a video
+    # with nothing saved and a duplicate.
+    res = client.post(f"/api/projects/{project}/annotations/clear-many", json={"videos": [
+        {"key": a, "revision": saved[a]}, {"key": b, "revision": "older"}, {"key": a, "revision": saved[a]},
+    ]})
+    assert res.status_code == 200, res.text
+    assert res.json()["done"] == [a] and [s["key"] for s in res.json()["skipped"]] == [b]
+    assert queue()[a]["status"] == "not_started" and queue()[b]["event_count"] == 1
+
+    # Delete two at once: out of the queue and export, listed for restoring; the skipped one stays.
+    res = client.post(f"/api/projects/{project}/videos/remove-many", json={"videos": [
+        {"key": a, "revision": ""}, {"key": c, "revision": saved[c]}, {"key": b, "revision": "older"},
+    ]}).json()
+    assert sorted(res["done"]) == sorted([a, c]) and [s["key"] for s in res["skipped"]] == [b]
+    assert a not in queue() and c not in queue() and b in queue()
+    info = client.get(f"/api/projects/{project}").json()
+    assert sorted(r["key"] for r in info["removed_videos"]) == sorted([a, c])
+    assert client.get(f"/api/projects/{project}/annotations", params={"key": c}).json() is None
+
+    # Undo brings both back (annotations stay cleared).
+    restored = client.post(f"/api/projects/{project}/videos/restore-many", json={"keys": [a, c]})
+    assert restored.status_code == 200 and restored.json()["removed_videos"] == []
+    assert a in queue() and c in queue() and queue()[c]["status"] == "not_started"
+
+    # Only videos, and at least one.
+    assert client.post(f"/api/projects/{project}/annotations/clear-many",
+                       json={"videos": [{"key": "clips/notes.txt"}]}).status_code == 400
+    assert client.post(f"/api/projects/{project}/annotations/clear-many", json={"videos": []}).status_code == 422
+
+
+def test_the_bucket_is_only_listed_when_someone_syncs(any_client, any_project, monkeypatch):
+    client, project = any_client, any_project
+    import time
+
+    import boto3
+
+    from app import s3_service
+
+    synced = client.get(f"/api/projects/{project}").json()["last_sync"]
+    time.sleep(1.1)  # S3 LastModified has one-second precision
+    boto3.client("s3", region_name="us-east-1").put_object(Bucket="test-videos", Key="clips/later.mp4", Body=b"x")
+
+    # Opening the queue (or exporting) doesn't list the bucket, and doesn't count as a sync.
+    def no_listing(*_args, **_kwargs):
+        raise AssertionError("the bucket was listed without a sync")
+
+    monkeypatch.setattr(s3_service, "list_videos", no_listing)
+    queue = client.get(f"/api/projects/{project}/videos").json()
+    assert "clips/later.mp4" not in [v["key"] for v in queue["videos"]] and len(queue["videos"]) == 3
+    assert queue["sync"]["synced_at"] == synced["synced_at"]
+    assert client.get(f"/api/projects/{project}").json()["last_sync"] == synced
+    exported = client.post(f"/api/projects/{project}/export").json()["data"]
+    assert len(exported["videos"]) == 3
+    # Deleting a video updates the totals without a new listing.
+    client.post(f"/api/projects/{project}/videos/remove-many", json={"videos": [{"key": "clips/serve_003.mov"}]})
+    assert client.get(f"/api/projects/{project}").json()["last_sync"]["video_count"] == 2
+    monkeypatch.undo()
+
+    # Syncing picks the new video up.
+    after = client.post(f"/api/projects/{project}/sync").json()
+    assert "clips/later.mp4" in [v["key"] for v in after["videos"]] and after["sync"]["new_count"] == 1
+
+
+def test_a_new_folder_waits_for_a_sync(any_client, any_project):
+    client, project = any_client, any_project
+    client.patch(f"/api/projects/{project}", json={"storage": {"prefix": "other/"}})
+    queue = client.get(f"/api/projects/{project}/videos").json()
+    assert queue["sync"] is None and queue["videos"] == []
+    exported = client.post(f"/api/projects/{project}/export").json()
+    assert any("hasn't been synced" in w for w in exported["warnings"])
+    synced = client.post(f"/api/projects/{project}/sync").json()
+    assert [v["key"] for v in synced["videos"]] == ["other/outside.mp4"]
+
+
+def test_projects_synced_before_lists_were_kept_get_theirs_back(db_client):
+    """A project whose last sync only recorded counts: its list is rebuilt once, as that sync saw it."""
+    import time
+
+    import boto3
+
+    from app.deps import get_store
+    from conftest import create_project
+
+    client = db_client
+    project = create_project(client)
+    store = get_store()
+    with store.db.transaction() as tx:  # as before this version: no list kept
+        tx.execute("DELETE FROM {p}synced_lists WHERE project_id = %s", (project,))
+    time.sleep(1.1)  # S3 LastModified has one-second precision
+    boto3.client("s3", region_name="us-east-1").put_object(Bucket="test-videos", Key="clips/later.mp4", Body=b"x")
+
+    queue = client.get(f"/api/projects/{project}/videos").json()
+    # The three videos that sync saw, not the one uploaded since.
+    assert [v["key"] for v in queue["videos"]] == ["clips/rally_001.mp4", "clips/serve_003.mov", "clips/set2/RALLY_002.MP4"]
+    assert store.load_synced_list(project) is not None

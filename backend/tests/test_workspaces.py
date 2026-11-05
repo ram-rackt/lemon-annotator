@@ -122,6 +122,9 @@ def test_coach_sees_only_flagged_videos(ws_client):
         ("delete", "/annotations", {"params": {"key": FLAGGED}}),
         ("delete", "/videos", {"params": {"key": FLAGGED}}),
         ("post", "/videos/restore", {"params": {"key": FLAGGED}}),
+        ("post", "/annotations/clear-many", {"json": {"videos": [{"key": FLAGGED}]}}),
+        ("post", "/videos/remove-many", {"json": {"videos": [{"key": FLAGGED}]}}),
+        ("post", "/videos/restore-many", {"json": {"keys": [FLAGGED]}}),
         ("post", "/export", {}),
     ]:
         res = getattr(client, method)(base + path, headers=COACH, **kwargs)

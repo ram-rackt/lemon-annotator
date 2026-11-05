@@ -5,18 +5,20 @@ import { accessToken, supabase } from "./supabase";
 import type {
   ActivityResult,
   AnnotationSave,
-  ClearResult,
+  BatchResult,
   ConnectionTestResult,
   ExportResult,
   Project,
   ProjectReview,
   ProjectUpdate,
   ReviewList,
+  SavedKey,
   StorageUpdate,
   StreamUrl,
   VideoAnnotation,
   VideoDetails,
   VideoList,
+  VideoRef,
 } from "./types";
 
 /**
@@ -130,6 +132,12 @@ export const api = {
     request<Project>(`/api/projects/${id}`, { method: "PATCH", body: json(body) }),
   deleteProject: (id: string) =>
     request<{ ok: boolean; moved_to: string }>(`/api/projects/${id}`, { method: "DELETE" }),
+  /** The signed-in user's saved AWS keys (IDs only). */
+  savedKeys: () => request<SavedKey[]>("/api/saved-keys"),
+  forgetSavedKey: (accessKeyId: string) =>
+    request<{ ok: boolean }>(`/api/saved-keys?access_key_id=${encodeURIComponent(accessKeyId)}`, {
+      method: "DELETE",
+    }),
   testStorage: (id: string, storage?: StorageUpdate) =>
     request<ConnectionTestResult>(`/api/projects/${id}/storage/test`, {
       method: "POST",
@@ -141,19 +149,14 @@ export const api = {
   streamUrl: (id: string, key: string) => request<StreamUrl>(`/api/projects/${id}/videos/stream-url?${q(key)}`),
   videoDetails: (id: string, key: string) => request<VideoDetails>(`/api/projects/${id}/videos/details?${q(key)}`),
   /** `revision`: the saved version the user saw (null: nothing saved; undefined: unknown, no check). */
-  /** Take a video out of the project (queue, export) and clear its annotations; the S3 file stays. */
-  removeVideo: (id: string, key: string, revision?: string | null) =>
-    request<ClearResult>(
-      `/api/projects/${id}/videos?${q(key)}${revision === undefined ? "" : `&revision=${encodeURIComponent(revision ?? "")}`}`,
-      { method: "DELETE" },
-    ),
-  restoreVideo: (id: string, key: string) =>
-    request<Project>(`/api/projects/${id}/videos/restore?${q(key)}`, { method: "POST" }),
-  clearAnnotation: (id: string, key: string, revision?: string | null) =>
-    request<ClearResult>(
-      `/api/projects/${id}/annotations?${q(key)}${revision === undefined ? "" : `&revision=${encodeURIComponent(revision ?? "")}`}`,
-      { method: "DELETE" },
-    ),
+  /** Clear the annotations of these videos. Ones saved by someone else since `revision` are skipped. */
+  clearAnnotations: (id: string, videos: VideoRef[]) =>
+    request<BatchResult>(`/api/projects/${id}/annotations/clear-many`, { method: "POST", body: json({ videos }) }),
+  /** Take videos out of the project (queue, export) and clear their annotations; the S3 files stay. */
+  removeVideos: (id: string, videos: VideoRef[]) =>
+    request<BatchResult>(`/api/projects/${id}/videos/remove-many`, { method: "POST", body: json({ videos }) }),
+  restoreVideos: (id: string, keys: string[]) =>
+    request<Project>(`/api/projects/${id}/videos/restore-many`, { method: "POST", body: json({ keys }) }),
   getAnnotation: (id: string, key: string) =>
     request<VideoAnnotation | null>(`/api/projects/${id}/annotations?${q(key)}`),
   saveAnnotation: (id: string, key: string, body: AnnotationSave) =>

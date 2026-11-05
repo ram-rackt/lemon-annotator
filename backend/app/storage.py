@@ -35,6 +35,8 @@ from .models import (
     IndexEntry,
     ProgressStats,
     Project,
+    SavedKey,
+    SyncedList,
     VideoAnnotation,
     utcnow,
 )
@@ -43,6 +45,10 @@ log = logging.getLogger(__name__)
 
 PROJECT_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,80}")
 INDEX_FILE = "_index.json"
+# The videos found by the latest sync, next to project.json.
+SYNCED_LIST_FILE = "synced_videos.json"
+# Not a project id (those never start with "_"), so it never collides with a project's lock.
+SAVED_KEYS_LOCK = "_saved_keys"
 
 # save_annotation(expected_revision=ANY_REVISION) skips the "nobody saved in between" check.
 ANY_REVISION = object()
@@ -196,6 +202,42 @@ class ProjectStore:
         except OSError as exc:
             raise StorageError(f"Cannot create data directory {root}: {exc}") from exc
 
+    # ----------------------------------------------------------- synced list
+    def load_synced_list(self, project_id: str) -> SyncedList | None:
+        path = self._require_project(project_id) / SYNCED_LIST_FILE
+        return SyncedList.model_validate(read_json(path)) if path.exists() else None
+
+    def save_synced_list(self, project_id: str, synced: SyncedList) -> None:
+        with self.lock(project_id):
+            write_json_atomic(self._require_project(project_id) / SYNCED_LIST_FILE, synced.model_dump(mode="json"))
+
+    # ------------------------------------------------------------ saved keys
+    # One file for every user's saved AWS keys: {user_id: {access_key_id: SavedKey}}.
+    def _saved_keys(self) -> dict[str, dict[str, Any]]:
+        path = self.root / "saved_keys.json"
+        return read_json(path) if path.exists() else {}
+
+    def list_saved_keys(self, user_id: str) -> list[SavedKey]:
+        with self.lock(SAVED_KEYS_LOCK):
+            return [SavedKey.model_validate(v) for v in self._saved_keys().get(user_id, {}).values()]
+
+    def get_saved_key(self, user_id: str, access_key_id: str) -> SavedKey | None:
+        with self.lock(SAVED_KEYS_LOCK):
+            raw = self._saved_keys().get(user_id, {}).get(access_key_id)
+        return SavedKey.model_validate(raw) if raw else None
+
+    def save_key(self, user_id: str, key: SavedKey) -> None:
+        with self.lock(SAVED_KEYS_LOCK):
+            data = self._saved_keys()
+            data.setdefault(user_id, {})[key.access_key_id] = key.model_dump(mode="json")
+            write_json_atomic(self.root / "saved_keys.json", data)
+
+    def forget_key(self, user_id: str, access_key_id: str) -> None:
+        with self.lock(SAVED_KEYS_LOCK):
+            data = self._saved_keys()
+            if data.get(user_id, {}).pop(access_key_id, None) is not None:
+                write_json_atomic(self.root / "saved_keys.json", data)
+
     # ----------------------------------------------------------------- utils
     def lock(self, project_id: str) -> threading.RLock:
         with self._locks_guard:
@@ -330,6 +372,23 @@ class ProjectStore:
             if index.pop(key, None) is not None or dest:
                 self._write_index(project_id, index)
         return dest
+
+    def clear_annotations(self, project_id: str, keys: list[str], by: str | None = None) -> set[str]:
+        """clear_annotation for many videos, writing the index once. Returns the keys that had saved annotations."""
+        cleared: set[str] = set()
+        with self.lock(project_id):
+            index = self.load_index(project_id)
+            folder = self.trash_dir / project_id / "cleared-annotations"
+            for key in keys:
+                src = self.annotation_path(project_id, key, index)
+                if src.exists():
+                    move_to(src, unique_path(folder / f"{src.stem}_{timestamp()}.json"))
+                    cleared.add(key)
+                if index.pop(key, None) is not None:
+                    cleared.add(key)
+            if cleared:
+                self._write_index(project_id, index)
+        return cleared
 
     def save_annotation(
         self, project_id: str, annotation: VideoAnnotation, expected_revision: object = ANY_REVISION

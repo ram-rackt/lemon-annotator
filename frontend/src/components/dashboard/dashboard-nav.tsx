@@ -1,6 +1,6 @@
 "use client";
 
-import { Flag, FolderKanban } from "lucide-react";
+import { BookOpen, Flag, FolderKanban } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -8,7 +8,7 @@ import { useReviewAll } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
 import { cn } from "@/lib/utils";
 
-/** Projects | Coach review, in the header of the pages that span every project. */
+/** Projects | Coach review | Guide, in the header of the pages that span every project. */
 export function DashboardNav() {
   const pathname = usePathname();
   const hydrated = useHydrated();
@@ -19,6 +19,7 @@ export function DashboardNav() {
   const tabs = [
     { href: "/", label: "Projects", icon: FolderKanban, count: undefined },
     { href: "/review", label: "Coach review", icon: Flag, count: flagged },
+    { href: "/guide", label: "Guide", icon: BookOpen, count: undefined },
   ];
 
   return (

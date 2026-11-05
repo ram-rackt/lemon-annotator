@@ -49,6 +49,14 @@ export interface StorageUpdate {
   bucket?: string;
   prefix?: string;
   endpoint_url?: string;
+  /** Use the secret this user saved earlier for `access_key_id` instead of sending one. */
+  use_saved_secret?: boolean;
+}
+
+/** An AWS key pair this user saved storage settings with (the secret stays on the server). */
+export interface SavedKey {
+  access_key_id: string;
+  last_used_at: string;
 }
 
 export interface ProjectSettings {
@@ -122,7 +130,8 @@ export interface VideoList {
   truncated: boolean;
   bucket: string;
   prefix: string;
-  sync: SyncInfo;
+  /** The latest sync the queue is built from; null until someone syncs the storage. */
+  sync: SyncInfo | null;
 }
 
 export interface VideoDetails {
@@ -150,10 +159,17 @@ export interface VideoDetails {
   duration_seconds: number | null;
 }
 
-export interface ClearResult {
+/** A video in a batch action, with the saved version the user saw ("" = nothing saved; omitted = don't check). */
+export interface VideoRef {
   key: string;
-  cleared: boolean;
-  moved_to: string | null;
+  revision?: string;
+}
+
+export interface BatchResult {
+  /** Videos the action was applied to. */
+  done: string[];
+  /** Left alone: someone saved them after the user last saw them. */
+  skipped: { key: string; updated_by: string | null }[];
 }
 
 export interface StreamUrl {

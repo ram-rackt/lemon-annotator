@@ -21,7 +21,7 @@ from typing import Any
 from pydantic import ValidationError as PydanticValidationError
 
 from .errors import NotFoundError, StorageError, ValidationError
-from .models import IndexEntry, ProgressStats, Project, VideoAnnotation, utcnow
+from .models import IndexEntry, ProgressStats, Project, SavedKey, SyncedList, VideoAnnotation, utcnow
 from .storage import (
     ANY_REVISION,
     PROJECT_ID_RE,
@@ -71,9 +71,25 @@ CREATE TABLE IF NOT EXISTS lemon.exports (
     created_by  text
 );
 
+-- The videos found by each project's latest sync (the queue is built from it).
+CREATE TABLE IF NOT EXISTS lemon.synced_lists (
+    project_id  text PRIMARY KEY REFERENCES lemon.projects (id),
+    data        jsonb NOT NULL
+);
+
+-- AWS keys each user saved, to use again in other projects. Only ever read for that user.
+CREATE TABLE IF NOT EXISTS lemon.saved_keys (
+    user_id       text NOT NULL,
+    access_key_id text NOT NULL,
+    data          jsonb NOT NULL,
+    PRIMARY KEY (user_id, access_key_id)
+);
+
 ALTER TABLE lemon.projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lemon.annotations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE lemon.exports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lemon.saved_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE lemon.synced_lists ENABLE ROW LEVEL SECURITY;
 
 -- Supabase's API roles get no access at all; only this backend (the postgres role) reads the tables.
 DO $$
@@ -118,6 +134,16 @@ CREATE TABLE IF NOT EXISTS exports (
     data        TEXT NOT NULL,
     created_at  TEXT NOT NULL,
     created_by  TEXT
+);
+CREATE TABLE IF NOT EXISTS synced_lists (
+    project_id  TEXT PRIMARY KEY REFERENCES projects (id),
+    data        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS saved_keys (
+    user_id       TEXT NOT NULL,
+    access_key_id TEXT NOT NULL,
+    data          TEXT NOT NULL,
+    PRIMARY KEY (user_id, access_key_id)
 );
 """
 
@@ -272,6 +298,48 @@ class DatabaseStore:
     def close(self) -> None:
         self.db.close()
 
+    # ----------------------------------------------------------- synced list
+    def load_synced_list(self, project_id: str) -> SyncedList | None:
+        with self.db.transaction() as tx:
+            row = tx.execute("SELECT data FROM {p}synced_lists WHERE project_id = %s", (project_id,)).fetchone()
+        return SyncedList.model_validate(_load(row[0])) if row else None
+
+    def save_synced_list(self, project_id: str, synced: SyncedList) -> None:
+        with self.db.transaction() as tx:
+            self._require_project(tx, project_id)
+            tx.execute(
+                "INSERT INTO {p}synced_lists (project_id, data) VALUES (%s, %s) "
+                "ON CONFLICT (project_id) DO UPDATE SET data = excluded.data",
+                (project_id, self.db.json(synced.model_dump(mode="json"))),
+            )
+
+    # ------------------------------------------------------------ saved keys
+    def list_saved_keys(self, user_id: str) -> list[SavedKey]:
+        with self.db.transaction() as tx:
+            rows = tx.execute("SELECT data FROM {p}saved_keys WHERE user_id = %s", (user_id,)).fetchall()
+        return [SavedKey.model_validate(_load(data)) for (data,) in rows]
+
+    def get_saved_key(self, user_id: str, access_key_id: str) -> SavedKey | None:
+        with self.db.transaction() as tx:
+            row = tx.execute(
+                "SELECT data FROM {p}saved_keys WHERE user_id = %s AND access_key_id = %s", (user_id, access_key_id)
+            ).fetchone()
+        return SavedKey.model_validate(_load(row[0])) if row else None
+
+    def save_key(self, user_id: str, key: SavedKey) -> None:
+        with self.db.transaction() as tx:
+            tx.execute(
+                "INSERT INTO {p}saved_keys (user_id, access_key_id, data) VALUES (%s, %s, %s) "
+                "ON CONFLICT (user_id, access_key_id) DO UPDATE SET data = excluded.data",
+                (user_id, key.access_key_id, self.db.json(key.model_dump(mode="json"))),
+            )
+
+    def forget_key(self, user_id: str, access_key_id: str) -> None:
+        with self.db.transaction() as tx:
+            tx.execute(
+                "DELETE FROM {p}saved_keys WHERE user_id = %s AND access_key_id = %s", (user_id, access_key_id)
+            )
+
     # ----------------------------------------------------------------- utils
     def lock(self, project_id: str) -> threading.RLock:
         """Serializes read-modify-write sequences within this process. Cross-process safety for
@@ -411,6 +479,23 @@ class DatabaseStore:
         if not self._soft_delete_annotation(project_id, key, by):
             return None
         return f"{self._where('annotations')} (marked as deleted, restorable)"
+
+    def clear_annotations(self, project_id: str, keys: list[str], by: str | None = None) -> set[str]:
+        """clear_annotation for many videos in one transaction (a few statements, not one per video).
+        Returns the keys that had saved annotations."""
+        cleared: set[str] = set()
+        with self.db.transaction() as tx:
+            self._require_project(tx, project_id)
+            now = utcnow()
+            for start in range(0, len(keys), 500):
+                chunk = keys[start : start + 500]
+                rows = tx.execute(
+                    "UPDATE {p}annotations SET deleted_at = %s, deleted_by = %s WHERE project_id = %s "
+                    f"AND deleted_at IS NULL AND video_key IN ({', '.join(['%s'] * len(chunk))}) RETURNING video_key",
+                    (now, by, project_id, *chunk),
+                ).fetchall()
+                cleared.update(key for (key,) in rows)
+        return cleared
 
     def save_annotation(
         self, project_id: str, annotation: VideoAnnotation, expected_revision: object = ANY_REVISION

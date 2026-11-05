@@ -93,7 +93,7 @@ def test_truncated_listing_does_not_flag_videos_missing(client, project, monkeyp
     _save(client, project, key="clips/set2/RALLY_002.MP4")
     monkeypatch.setenv("LEMON_MAX_LIST_KEYS", "1")
     get_settings.cache_clear()
-    body = client.get(f"/api/projects/{project}/videos").json()
+    body = client.post(f"/api/projects/{project}/sync").json()
     assert body["truncated"] is True
     assert not any(v["missing"] for v in body["videos"])
 

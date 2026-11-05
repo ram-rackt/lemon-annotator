@@ -125,6 +125,10 @@ def cleared_value(field: SchemaField) -> bool | str | None:
 # --------------------------------------------------------------------------- #
 
 
+# Region assumed until a project names its bucket's (ap-south-1: Mumbai).
+DEFAULT_REGION = "ap-south-1"
+
+
 class StorageConfig(BaseModel):
     """S3 connection settings as persisted in project.json.
 
@@ -134,7 +138,7 @@ class StorageConfig(BaseModel):
     access_key_id: str = ""
     secret_access_key: str = ""
     session_token: str = ""
-    region: str = "us-east-1"
+    region: str = DEFAULT_REGION
     bucket: str = ""
     prefix: str = ""
     endpoint_url: str = ""
@@ -187,6 +191,8 @@ class StorageUpdate(BaseModel):
     bucket: str | None = None
     prefix: str | None = None
     endpoint_url: str | None = None
+    # Use the secret this user saved earlier for `access_key_id` (see SavedKey) instead of sending one.
+    use_saved_secret: bool = False
 
     # AWS keys never contain whitespace, so a stray space or newline from pasting is always a mistake.
     @field_validator("access_key_id", "secret_access_key", "session_token", "region", "bucket", "prefix", "endpoint_url")
@@ -196,13 +202,27 @@ class StorageUpdate(BaseModel):
 
     def apply_to(self, cfg: StorageConfig) -> StorageConfig:
         data = cfg.model_dump()
-        for name, value in self.model_dump(exclude_unset=True).items():
+        for name, value in self.model_dump(exclude_unset=True, exclude={"use_saved_secret"}).items():
             if value is None:
                 continue
             data[name] = value
         if not data["region"]:
-            data["region"] = "us-east-1"
+            data["region"] = DEFAULT_REGION
         return StorageConfig(**data)
+
+
+class SavedKey(BaseModel):
+    """An AWS key pair a user saved storage settings with, kept so they can use it again in other projects.
+    Belongs to that one user; the secret never leaves the server."""
+
+    access_key_id: str
+    secret_access_key: str
+    last_used_at: datetime = Field(default_factory=utcnow)
+
+
+class SavedKeyPublic(BaseModel):
+    access_key_id: str
+    last_used_at: datetime
 
 
 class ProjectSettings(BaseModel):
@@ -392,7 +412,24 @@ class VideoList(BaseModel):
     truncated: bool
     bucket: str
     prefix: str
-    sync: SyncInfo
+    # The latest sync the queue is built from; None until someone syncs the storage.
+    sync: SyncInfo | None
+
+
+class SyncedVideo(BaseModel):
+    key: str
+    size: int
+    last_modified: datetime
+
+
+class SyncedList(BaseModel):
+    """The videos found by the latest sync ("Sync storage"), stored apart from the project because it can
+    be long. The queue is built from it, so the bucket is only listed when someone asks for a sync."""
+
+    bucket: str
+    prefix: str
+    truncated: bool = False
+    videos: list[SyncedVideo] = Field(default_factory=list)
 
 
 class StreamUrl(BaseModel):
@@ -432,6 +469,36 @@ class ClearResult(BaseModel):
     key: str
     cleared: bool
     moved_to: str | None
+
+
+class VideoRef(BaseModel):
+    key: str = Field(min_length=1)
+    # The saved version the client saw ("" = nothing saved). If someone saved another since, the video is
+    # skipped. None: don't check.
+    revision: str | None = None
+
+
+class VideoBatch(BaseModel):
+    """Several videos selected in the queue (clear or delete them together)."""
+
+    videos: list[VideoRef] = Field(min_length=1, max_length=2000)
+
+
+class KeyBatch(BaseModel):
+    keys: list[str] = Field(min_length=1, max_length=2000)
+
+
+class SkippedVideo(BaseModel):
+    key: str
+    # Who saved it after the client last saw it.
+    updated_by: str | None = None
+
+
+class BatchResult(BaseModel):
+    # Videos the action was applied to.
+    done: list[str]
+    # Left alone: someone saved them after the client last saw them.
+    skipped: list[SkippedVideo] = Field(default_factory=list)
 
 
 class ConnectionTestResult(BaseModel):

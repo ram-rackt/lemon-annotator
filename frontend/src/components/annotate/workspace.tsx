@@ -10,6 +10,7 @@ import {
   Flag,
   FolderSearch,
   Keyboard,
+  RefreshCw,
   Settings2,
   Users,
 } from "lucide-react";
@@ -41,7 +42,8 @@ import {
   keys,
   streamUrlQuery,
   useActivity,
-  useRestoreVideo,
+  useSyncStorage,
+  useRestoreVideos,
   useAnnotation,
   useProject,
   useSaveAnnotation,
@@ -73,12 +75,14 @@ import {
 import { createTimeStore } from "@/lib/time-store";
 import type {
   AnnotationEvent,
+  BatchResult,
   LabelValue,
   Project,
   StreamUrl,
   VideoAnnotation,
   VideoItem,
   VideoList,
+  VideoRef,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -96,11 +100,27 @@ export function AnnotateWorkspace() {
   const configured = Boolean(project?.storage.is_configured);
   const videosQ = useVideos(projectId, configured);
   const list = videosQ.data;
+  // The queue is built from the latest sync; only this (a button press) lists the bucket again.
+  const sync = useSyncStorage(projectId);
+  const runSync = () =>
+    sync.mutate(undefined, {
+      onSuccess: ({ sync: s }) =>
+        toast.success(
+          s ? `Synced · ${s.video_count.toLocaleString()} video${s.video_count === 1 ? "" : "s"}` : "Synced",
+        ),
+      onError: (err) => {
+        const { title, hint } = errorMessage(err);
+        toast.error(`Sync failed: ${title}`, { description: hint ?? undefined });
+      },
+    });
 
   // Once the workspace has been shown it stays mounted: replacing it with an error or empty screen
   // because a background refresh failed would throw away unsaved events.
   const [workspaceShown, setWorkspaceShown] = useState(false);
   if (list && list.videos.length > 0 && !workspaceShown) setWorkspaceShown(true);
+  // Unless the queue is now empty (e.g. its last video was deleted) and nothing is waiting to be saved:
+  // then show the empty screen rather than a video that is no longer in the project.
+  if (list && list.videos.length === 0 && workspaceShown && !pendingSave.hasPending()) setWorkspaceShown(false);
 
   // A failed refresh while data is on screen is reported, not rendered as a full-page error.
   useEffect(() => {
@@ -167,25 +187,41 @@ export function AnnotateWorkspace() {
     );
   }
   if (list.videos.length === 0 && !workspaceShown) {
+    const syncButton = (
+      <Button size="sm" onClick={runSync} disabled={sync.isPending}>
+        {sync.isPending ? <Spinner /> : <RefreshCw />} Sync storage
+      </Button>
+    );
     return (
       <Empty className="h-full">
         <EmptyHeader>
-          <EmptyMedia variant="icon">
-            <FolderSearch />
-          </EmptyMedia>
-          <EmptyTitle>No videos found</EmptyTitle>
-          <EmptyDescription>
-            No .mp4 or .mov files under{" "}
-            <code className="font-mono">
-              s3://{list.bucket}/{list.prefix}
-            </code>
-            .
-          </EmptyDescription>
+          <EmptyMedia variant="icon">{list.sync ? <FolderSearch /> : <RefreshCw />}</EmptyMedia>
+          {list.sync ? (
+            <>
+              <EmptyTitle>No videos found</EmptyTitle>
+              <EmptyDescription>
+                The latest sync found no .mp4 or .mov files under{" "}
+                <code className="font-mono">
+                  s3://{list.bucket}/{list.prefix}
+                </code>
+                . Added some since? Sync again.
+              </EmptyDescription>
+            </>
+          ) : (
+            <>
+              <EmptyTitle>Sync the storage to load the videos</EmptyTitle>
+              <EmptyDescription>
+                Lemon reads the folder only when you ask it to. Sync now to list the videos in{" "}
+                <code className="font-mono">
+                  s3://{list.bucket}/{list.prefix}
+                </code>
+                .
+              </EmptyDescription>
+            </>
+          )}
         </EmptyHeader>
         <EmptyContent className="flex-row justify-center">
-          <Button size="sm" variant="outline" onClick={() => videosQ.refetch()} disabled={videosQ.isFetching}>
-            {videosQ.isFetching && <Spinner />} Re-scan
-          </Button>
+          {syncButton}
           {settingsLink}
         </EmptyContent>
       </Empty>
@@ -196,8 +232,9 @@ export function AnnotateWorkspace() {
     <Workspace
       project={project}
       list={list}
-      refreshing={videosQ.isFetching}
-      onRefresh={() => videosQ.refetch()}
+      refreshing={videosQ.isFetching || sync.isPending}
+      // A coach's queue is the flagged videos (re-read); everyone else syncs the storage.
+      onRefresh={project.access === "coach" ? () => videosQ.refetch() : runSync}
       initialKey={searchParams.get("v")}
     />
   );
@@ -371,9 +408,12 @@ function Workspace({
   const [showRequired, setShowRequired] = useState(false);
   const [showRequiredLabels, setShowRequiredLabels] = useState(false);
   const [detailsVideo, setDetailsVideo] = useState<VideoItem | null>(null);
-  const [clearVideo, setClearVideo] = useState<VideoItem | null>(null);
-  const [removeVideo, setRemoveVideo] = useState<VideoItem | null>(null);
-  const restoreMut = useRestoreVideo(projectId);
+  // Videos waiting for "Clear annotations" / "Delete" to be confirmed (one, or a selection).
+  const [clearVideos, setClearVideos] = useState<VideoItem[] | null>(null);
+  const [removeVideos, setRemoveVideos] = useState<VideoItem[] | null>(null);
+  // Videos selected in the queue to clear or delete together; null when not selecting.
+  const [selection, setSelection] = useState<Set<string> | null>(null);
+  const restoreMut = useRestoreVideos(projectId);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const lastRefresh = useRef<{ key: string; at: number } | null>(null);
 
@@ -930,34 +970,62 @@ function Workspace({
           : undefined;
   };
 
-  const clearAnnotations = async (video: VideoItem) => {
+  /** Each video with the saved version this user saw, so the server skips ones saved by someone since. */
+  const refsFor = (targets: VideoItem[]): VideoRef[] =>
+    targets.map((v) => {
+      const seen = seenRevision(v);
+      return seen === undefined ? { key: v.key } : { key: v.key, revision: seen ?? "" };
+    });
+
+  /** Videos a batch action left alone because someone saved them since: say so, and re-read them. */
+  const reportSkipped = (skipped: BatchResult["skipped"], action: "cleared" | "deleted") => {
+    if (!skipped.length) return;
+    for (const { key } of skipped) qc.invalidateQueries({ queryKey: keys.annotation(projectId, key) });
+    qc.invalidateQueries({ queryKey: ["projects", projectId, "activity"] });
+    const one = skipped.length === 1;
+    const who = joinNames([...new Set(skipped.map((v) => v.updated_by ?? "Someone else"))]);
+    toast.warning(
+      one ? `${skipped[0].key.split("/").pop()} was not ${action}` : `${skipped.length} videos were not ${action}`,
+      {
+        description: `${who} saved ${one ? "it" : "them"} after you last saw ${one ? "it" : "them"}. Open ${
+          one ? "it" : "them"
+        } to see the latest version, then try again if you still want to.`,
+        duration: 8000,
+      },
+    );
+  };
+
+  const ensureNoSaveRunning = () => {
     if (saveMut.isPending) {
       toast.error("A save is in progress. Try again in a moment.");
       throw new Error("save in progress");
     }
-    await qc.cancelQueries({ queryKey: keys.annotation(projectId, video.key) });
-    const seen = seenRevision(video);
-    let movedTo: string | null = null;
+  };
+
+  /** "Clear annotations" for one video or a selection: back to not started, for everyone. */
+  const clearAnnotations = async (targets: VideoItem[]) => {
+    ensureNoSaveRunning();
+    await Promise.all(targets.map((v) => qc.cancelQueries({ queryKey: keys.annotation(projectId, v.key) })));
+    let result: BatchResult;
     try {
       // Always asked: the queue's status may be a few seconds old.
-      movedTo = (await api.clearAnnotation(projectId, video.key, seen)).moved_to;
+      result = await api.clearAnnotations(projectId, refsFor(targets));
     } catch (err) {
       const { title, hint } = errorMessage(err);
       toast.error(`Couldn't clear annotations: ${title}`, { description: hint ?? undefined });
-      if (err instanceof ApiError && err.code === "CLEAR_CONFLICT") {
-        qc.invalidateQueries({ queryKey: keys.annotation(projectId, video.key) });
-        qc.invalidateQueries({ queryKey: ["projects", projectId, "activity"] });
-      }
       throw err;
     }
-    qc.setQueryData(keys.annotation(projectId, video.key), null);
-    qc.removeQueries({ queryKey: keys.details(projectId, video.key) });
+    const done = new Set(result.done);
+    for (const key of done) {
+      qc.setQueryData(keys.annotation(projectId, key), null);
+      qc.removeQueries({ queryKey: keys.details(projectId, key) });
+    }
     qc.setQueryData<VideoList>(keys.videos(projectId), (prev) =>
       prev
         ? {
             ...prev,
             videos: prev.videos.flatMap((v) =>
-              v.key !== video.key
+              !done.has(v.key)
                 ? [v]
                 : v.missing // annotations were all that kept a deleted video in the queue
                   ? []
@@ -968,11 +1036,12 @@ function Workspace({
     );
     qc.invalidateQueries({ queryKey: keys.projects, exact: true });
     invalidateReview(qc, projectId);
-    if (video.key === activeKeyRef.current) {
+    const current = activeKeyRef.current;
+    if (current && done.has(current)) {
       setLabels(withLabelDefaults(schema, undefined));
       setEvents([]);
       setDirty(false);
-      baseRef.current = baseOf(video.key, null);
+      baseRef.current = baseOf(current, null);
       pendingSave.register(projectId, null);
       setEditingId(null);
       setPreEditDraft(null);
@@ -981,68 +1050,92 @@ function Workspace({
       bumpVersion();
       savedVersionRef.current = versionRef.current;
     }
-    toast.success(`Cleared annotations for ${video.filename}`, {
-      description: movedTo ? `Previous version kept at ${movedTo}` : undefined,
-    });
+    setSelection(null);
+    if (done.size) {
+      const name = done.size === 1 ? targets.find((v) => done.has(v.key))?.filename : `${done.size} videos`;
+      toast.success(`Cleared annotations for ${name}`, {
+        description: "The previous versions are kept in Lemon's trash, so they can still be recovered.",
+      });
+    }
+    reportSkipped(result.skipped, "cleared");
   };
 
-  /** "Delete video": out of the queue and export for everyone, annotations cleared, the S3 file kept. */
-  const deleteVideo = async (video: VideoItem) => {
-    if (saveMut.isPending) {
-      toast.error("A save is in progress. Try again in a moment.");
-      throw new Error("save in progress");
-    }
-    await qc.cancelQueries({ queryKey: keys.annotation(projectId, video.key) });
+  /** "Delete" for one video or a selection: out of the queue and export for everyone, annotations
+   * cleared, the S3 files kept (and restorable). */
+  const deleteVideos = async (targets: VideoItem[]) => {
+    ensureNoSaveRunning();
+    await Promise.all(targets.map((v) => qc.cancelQueries({ queryKey: keys.annotation(projectId, v.key) })));
+    let result: BatchResult;
     try {
-      await api.removeVideo(projectId, video.key, seenRevision(video));
+      result = await api.removeVideos(projectId, refsFor(targets));
     } catch (err) {
       const { title, hint } = errorMessage(err);
-      toast.error(`Couldn't delete the video: ${title}`, { description: hint ?? undefined });
-      if (err instanceof ApiError && err.code === "CLEAR_CONFLICT") {
-        qc.invalidateQueries({ queryKey: keys.annotation(projectId, video.key) });
-        qc.invalidateQueries({ queryKey: ["projects", projectId, "activity"] });
-      }
+      toast.error(`Couldn't delete ${targets.length === 1 ? "the video" : "the videos"}: ${title}`, {
+        description: hint ?? undefined,
+      });
       throw err;
     }
-    // Where to go if it was open: the next video still to do, else its neighbour.
-    const index = videos.findIndex((v) => v.key === video.key);
-    const rest = videos.filter((v) => v.key !== video.key);
-    const next = findNextTodo(videos, video.key) ?? rest[Math.min(index, rest.length - 1)]?.key ?? null;
+    const gone = new Set(result.done);
+    // Where to go if the open video went: the next one still to do after it, else the next one.
+    const current = activeKeyRef.current;
+    let next: string | null = null;
+    if (current && gone.has(current)) {
+      const i = videos.findIndex((v) => v.key === current);
+      const after = [...videos.slice(i + 1), ...videos.slice(0, Math.max(i, 0))].filter(
+        (v) => !gone.has(v.key) && !v.missing,
+      );
+      next = (after.find((v) => v.status !== "completed") ?? after[0])?.key ?? null;
+    }
 
-    qc.setQueryData(keys.annotation(projectId, video.key), null);
-    qc.removeQueries({ queryKey: keys.details(projectId, video.key) });
+    for (const key of gone) {
+      qc.setQueryData(keys.annotation(projectId, key), null);
+      qc.removeQueries({ queryKey: keys.details(projectId, key) });
+    }
     qc.setQueryData<VideoList>(keys.videos(projectId), (prev) =>
-      prev ? { ...prev, videos: prev.videos.filter((v) => v.key !== video.key) } : prev,
+      prev ? { ...prev, videos: prev.videos.filter((v) => !gone.has(v.key)) } : prev,
     );
     qc.invalidateQueries({ queryKey: keys.projects, exact: true });
-    qc.invalidateQueries({ queryKey: keys.project(projectId), exact: true }); // its list of removed videos
+    qc.invalidateQueries({ queryKey: keys.project(projectId), exact: true }); // its list of deleted videos
     invalidateReview(qc, projectId);
-    if (video.key === activeKeyRef.current) {
+    if (current && gone.has(current)) {
       // Its unsaved edits go with it: nothing is left to save.
       pendingSave.register(projectId, null);
       bumpVersion();
       savedVersionRef.current = versionRef.current;
       if (next) doSwitch(next);
     }
-    toast.success(`Deleted ${video.filename} from the project`, {
-      description: "The file is still in S3. Restore it any time under Settings > General.",
-      action: {
-        label: "Undo",
-        onClick: () =>
-          restoreMut.mutate(video.key, {
-            onSuccess: () => toast.success(`${video.filename} is back in the queue`),
-            onError: (err) => {
-              const { title, hint } = errorMessage(err);
-              toast.error(`Couldn't restore the video: ${title}`, { description: hint ?? undefined });
-            },
-          }),
-      },
-    });
+    setSelection(null);
+    if (gone.size) {
+      const deleted = [...gone];
+      const one = deleted.length === 1;
+      const name = one ? targets.find((v) => v.key === deleted[0])?.filename : `${deleted.length} videos`;
+      toast.success(`Deleted ${name} from the project`, {
+        description: `The ${one ? "file is" : "files are"} still in S3. Restore ${
+          one ? "it" : "them"
+        } any time under Settings > General.`,
+        action: {
+          label: "Undo",
+          onClick: () =>
+            restoreMut.mutate(deleted, {
+              onSuccess: () => toast.success(`${name} ${one ? "is" : "are"} back in the queue`),
+              onError: (err) => {
+                const { title, hint } = errorMessage(err);
+                toast.error(`Couldn't restore: ${title}`, { description: hint ?? undefined });
+              },
+            }),
+        },
+      });
+    }
+    reportSkipped(result.skipped, "deleted");
   };
 
   /* ------------------------------- layout -------------------------------- */
 
   const toggleQueue = () => prefsStore.write({ ...prefs, queueOpen: !prefs.queueOpen });
+
+  /** Events a clear / delete would remove: saved ones, and the unsaved ones on the open video. */
+  const eventsIn = (targets: VideoItem[] | null) =>
+    (targets ?? []).reduce((n, v) => n + (v.key === activeKey && ready ? events.length : v.event_count), 0);
   const togglePanel = () => prefsStore.write({ ...prefs, panelOpen: !prefs.panelOpen });
 
   /* ----------------------------- media errors ---------------------------- */
@@ -1210,10 +1303,13 @@ function Workspace({
             activeEventCount={ready ? events.length : 0}
             onShowDetails={setDetailsVideo}
             onOpenVideo={openVideoInTab}
-            onClear={setClearVideo}
-            onRemove={setRemoveVideo}
+            onClear={setClearVideos}
+            onRemove={setRemoveVideos}
+            selection={coachView ? null : selection}
+            onSelectionChange={setSelection}
             storageKey={`lemon.queue.${projectId}`}
             presence={presence}
+            unsynced={!list.sync && !coachView}
             limited={coachView}
           />
         </div>
@@ -1430,17 +1526,17 @@ function Workspace({
       />
 
       <ClearAnnotationsDialog
-        video={clearVideo}
-        eventCount={clearVideo?.key === activeKey && ready ? events.length : (clearVideo?.event_count ?? 0)}
-        onOpenChange={(open) => !open && setClearVideo(null)}
+        videos={clearVideos}
+        eventCount={eventsIn(clearVideos)}
+        onOpenChange={(open) => !open && setClearVideos(null)}
         onConfirm={clearAnnotations}
       />
 
       <RemoveVideoDialog
-        video={removeVideo}
-        eventCount={removeVideo?.key === activeKey && ready ? events.length : (removeVideo?.event_count ?? 0)}
-        onOpenChange={(open) => !open && setRemoveVideo(null)}
-        onConfirm={deleteVideo}
+        videos={removeVideos}
+        eventCount={eventsIn(removeVideos)}
+        onOpenChange={(open) => !open && setRemoveVideos(null)}
+        onConfirm={deleteVideos}
       />
     </div>
   );

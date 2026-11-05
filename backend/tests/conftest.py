@@ -124,12 +124,15 @@ SCHEMA = {
     ],
 }
 
-STORAGE = {"bucket": BUCKET, "prefix": "clips/", "access_key_id": "testing", "secret_access_key": "s3cr3t-value-xyz"}
+STORAGE = {"bucket": BUCKET, "prefix": "clips/", "region": "us-east-1", "access_key_id": "testing", "secret_access_key": "s3cr3t-value-xyz"}
 
 
 def create_project(client, headers=None) -> str:
     pid = client.post("/api/projects", json={"name": "Badminton"}, headers=headers).json()["id"]
     res = client.patch(f"/api/projects/{pid}", json={"storage": STORAGE, "label_schema": SCHEMA}, headers=headers)
+    assert res.status_code == 200, res.text
+    # Like a user would: the queue only has the bucket's videos once someone syncs.
+    res = client.post(f"/api/projects/{pid}/sync", headers=headers)
     assert res.status_code == 200, res.text
     return pid
 

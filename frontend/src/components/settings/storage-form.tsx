@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { CheckCircle2, ChevronDown, Eye, EyeOff, PlugZap, ShieldAlert, XCircle } from "lucide-react";
+import { CheckCircle2, ChevronDown, Eye, EyeOff, KeyRound, PlugZap, ShieldAlert, XCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -10,35 +10,48 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SyncPanel } from "@/components/settings/sync-panel";
 import { Spinner } from "@/components/ui/spinner";
-import { useUpdateProject } from "@/hooks/queries";
+import { useForgetSavedKey, useSavedKeys, useUpdateProject } from "@/hooks/queries";
 import { ApiError, api, errorMessage } from "@/lib/api";
+import { formatRelative } from "@/lib/format";
 import type { ConnectionTestResult, Project, StorageUpdate } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const REGIONS = [
-  "us-east-1",
-  "us-east-2",
-  "us-west-1",
-  "us-west-2",
-  "ca-central-1",
-  "sa-east-1",
-  "eu-west-1",
-  "eu-west-2",
-  "eu-west-3",
-  "eu-central-1",
-  "eu-north-1",
-  "eu-south-1",
-  "ap-south-1",
-  "ap-southeast-1",
-  "ap-southeast-2",
-  "ap-northeast-1",
-  "ap-northeast-2",
-  "ap-east-1",
-  "me-south-1",
-  "af-south-1",
+/** Where new projects' buckets are assumed to be (the backend uses the same default). */
+const DEFAULT_REGION = "ap-south-1";
+
+const REGIONS: [code: string, place: string][] = [
+  ["ap-south-1", "Mumbai"],
+  ["ap-south-2", "Hyderabad"],
+  ["ap-southeast-1", "Singapore"],
+  ["ap-southeast-2", "Sydney"],
+  ["ap-northeast-1", "Tokyo"],
+  ["ap-northeast-2", "Seoul"],
+  ["ap-east-1", "Hong Kong"],
+  ["me-south-1", "Bahrain"],
+  ["me-central-1", "UAE"],
+  ["eu-west-1", "Ireland"],
+  ["eu-west-2", "London"],
+  ["eu-west-3", "Paris"],
+  ["eu-central-1", "Frankfurt"],
+  ["eu-north-1", "Stockholm"],
+  ["eu-south-1", "Milan"],
+  ["us-east-1", "N. Virginia"],
+  ["us-east-2", "Ohio"],
+  ["us-west-1", "N. California"],
+  ["us-west-2", "Oregon"],
+  ["ca-central-1", "Canada"],
+  ["sa-east-1", "São Paulo"],
+  ["af-south-1", "Cape Town"],
 ];
+const isListedRegion = (region: string) => REGIONS.some(([code]) => code === region);
+/** Select value for "a region not in the list" (typed in by hand). */
+const OTHER_REGION = "__other";
+
+/** "AKIAIOSFODNN7EXAMPLE" -> "AKIA…MPLE": enough to recognise a key in a list. */
+const maskKey = (id: string) => (id.length > 10 ? `${id.slice(0, 4)}…${id.slice(-4)}` : id);
 
 interface FormState {
   bucket: string;
@@ -54,7 +67,8 @@ function fromProject(p: Project): FormState {
   return {
     bucket: p.storage.bucket,
     prefix: p.storage.prefix,
-    region: p.storage.region,
+    // A project not connected yet starts from the default region.
+    region: p.storage.is_configured ? p.storage.region : DEFAULT_REGION,
     access_key_id: p.storage.access_key_id,
     secret_access_key: "",
     session_token: "",
@@ -71,10 +85,17 @@ export function StorageForm({ project }: { project: Project }) {
   const [advanced, setAdvanced] = useState(Boolean(project.storage.endpoint_url || project.storage.has_session_token));
   const [testResult, setTestResult] = useState<{ ok: ConnectionTestResult } | { error: unknown } | null>(null);
   const update = useUpdateProject(project.id);
+  // Typing a region that isn't in the list.
+  const [otherRegion, setOtherRegion] = useState(() => !isListedRegion(fromProject(project).region));
+  const showOtherRegion = otherRegion || !isListedRegion(form.region);
+  // The user's own saved keys. `useSaved`: the secret comes from their saved key for form.access_key_id.
+  const savedKeys = useSavedKeys().data ?? [];
+  const forgetKey = useForgetSavedKey();
+  const [useSaved, setUseSaved] = useState(false);
 
   const hasSecret = project.storage.has_secret_access_key && !clearSecret;
   const hasToken = project.storage.has_session_token && !clearToken;
-  const dirty = JSON.stringify(form) !== JSON.stringify(baseline) || clearSecret || clearToken;
+  const dirty = JSON.stringify(form) !== JSON.stringify(baseline) || clearSecret || clearToken || useSaved;
 
   const set = (patch: Partial<FormState>) => {
     setForm((f) => ({ ...f, ...patch }));
@@ -97,6 +118,7 @@ export function StorageForm({ project }: { project: Project }) {
       endpoint_url: form.endpoint_url,
     };
     if (form.secret_access_key) body.secret_access_key = form.secret_access_key.trim();
+    else if (useSaved) body.use_saved_secret = true;
     else if (clearSecret) body.secret_access_key = "";
     if (form.session_token) body.session_token = form.session_token.trim();
     else if (clearToken) body.session_token = "";
@@ -119,6 +141,7 @@ export function StorageForm({ project }: { project: Project }) {
           setBaseline(next);
           setClearSecret(false);
           setClearToken(false);
+          setUseSaved(false);
           toast.success("Storage settings saved");
         },
         onError: (err) => {
@@ -167,33 +190,114 @@ export function StorageForm({ project }: { project: Project }) {
               className="font-mono"
             />
           </Field>
-          <Field label="Region" htmlFor="region" hint="e.g. us-east-1">
-            <Input
-              id="region"
-              list="aws-regions"
-              placeholder="us-east-1"
-              value={form.region}
-              onChange={(e) => set({ region: e.target.value.trim() })}
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono"
-            />
-            <datalist id="aws-regions">
-              {REGIONS.map((r) => (
-                <option key={r} value={r} />
-              ))}
-            </datalist>
+          <Field label="Region" htmlFor="region" hint={showOtherRegion ? "Type the region code." : undefined}>
+            <Select
+              value={showOtherRegion ? OTHER_REGION : form.region}
+              onValueChange={(v) => {
+                if (v === OTHER_REGION) {
+                  setOtherRegion(true);
+                } else {
+                  setOtherRegion(false);
+                  set({ region: v });
+                }
+              }}
+            >
+              <SelectTrigger id="region" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {REGIONS.map(([code, place]) => (
+                  <SelectItem key={code} value={code}>
+                    <span className="font-mono">{code}</span>
+                    <span className="text-muted-foreground">{place}</span>
+                  </SelectItem>
+                ))}
+                <SelectItem value={OTHER_REGION}>Other…</SelectItem>
+              </SelectContent>
+            </Select>
+            {showOtherRegion && (
+              <Input
+                aria-label="Region code"
+                placeholder="eu-west-1"
+                value={form.region}
+                onChange={(e) => set({ region: e.target.value.trim() })}
+                autoComplete="off"
+                spellCheck={false}
+                className="font-mono"
+              />
+            )}
           </Field>
         </div>
 
         <SectionLabel>Credentials</SectionLabel>
+        {savedKeys.length > 0 && (
+          <div className="-mt-2">
+            <Field
+              label="Saved keys"
+              htmlFor="saved-key"
+              hint={
+                useSaved ? (
+                  <>
+                    Your saved secret for this key will be used ·{" "}
+                    <button
+                      type="button"
+                      className="underline underline-offset-2"
+                      disabled={forgetKey.isPending}
+                      onClick={() =>
+                        forgetKey.mutate(form.access_key_id, {
+                          onSuccess: () => {
+                            setUseSaved(false);
+                            set({ access_key_id: baseline.access_key_id });
+                            toast.success("Saved key forgotten", {
+                              description: "Projects already using it keep working.",
+                            });
+                          },
+                          onError: (err) => toast.error(errorMessage(err).title),
+                        })
+                      }
+                    >
+                      forget this key
+                    </button>
+                  </>
+                ) : (
+                  "Keys you have connected before. Only you can see and use them."
+                )
+              }
+            >
+              <Select
+                value={useSaved ? form.access_key_id : ""}
+                onValueChange={(id) => {
+                  set({ access_key_id: id, secret_access_key: "" });
+                  setClearSecret(false);
+                  setUseSaved(true);
+                }}
+              >
+                <SelectTrigger id="saved-key" className="w-full sm:w-96">
+                  <SelectValue placeholder="Fill in a saved key…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {savedKeys.map((k) => (
+                    <SelectItem key={k.access_key_id} value={k.access_key_id}>
+                      <KeyRound className="text-muted-foreground" />
+                      <span className="font-mono">{maskKey(k.access_key_id)}</span>
+                      <span className="text-muted-foreground">used {formatRelative(k.last_used_at)}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+        )}
         <div className="-mt-2 grid gap-4 sm:grid-cols-2">
           <Field label="Access Key ID" htmlFor="akid" hint="Leave both keys empty to use your local AWS profile.">
             <Input
               id="akid"
               placeholder="AKIA…"
               value={form.access_key_id}
-              onChange={(e) => set({ access_key_id: e.target.value.trim() })}
+              onChange={(e) => {
+                setUseSaved(false);
+                set({ access_key_id: e.target.value.trim() });
+              }}
               autoComplete="off"
               spellCheck={false}
               className="font-mono"
@@ -203,7 +307,9 @@ export function StorageForm({ project }: { project: Project }) {
             label="Secret Access Key"
             htmlFor="secret"
             hint={
-              hasSecret ? (
+              useSaved && !form.secret_access_key ? (
+                "From your saved keys."
+              ) : hasSecret ? (
                 <>
                   Saved. Leave blank to keep it ·{" "}
                   <button type="button" className="underline underline-offset-2" onClick={() => setClearSecret(true)}>
@@ -219,7 +325,7 @@ export function StorageForm({ project }: { project: Project }) {
               <Input
                 id="secret"
                 type={showSecret ? "text" : "password"}
-                placeholder={hasSecret ? "••••••••••••••••" : "wJalrXUtnFEMI/…"}
+                placeholder={hasSecret || useSaved ? "••••••••••••••••" : "wJalrXUtnFEMI/…"}
                 value={form.secret_access_key}
                 onChange={(e) => set({ secret_access_key: e.target.value })}
                 autoComplete="new-password"
@@ -322,7 +428,15 @@ export function StorageForm({ project }: { project: Project }) {
             <AlertDescription className="min-w-0">
               <p>{errorMessage(testResult.error).hint}</p>
               {detectedRegion && (
-                <Button size="xs" variant="outline" className="mt-2" onClick={() => set({ region: detectedRegion })}>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="mt-2"
+                  onClick={() => {
+                    setOtherRegion(false); // listed regions show in the dropdown, others in the box
+                    set({ region: detectedRegion });
+                  }}
+                >
                   Use {detectedRegion}
                 </Button>
               )}
@@ -334,7 +448,8 @@ export function StorageForm({ project }: { project: Project }) {
           <ShieldAlert className="mt-0.5 size-4 shrink-0" />
           <p>
             Keys are stored unencrypted with this project&apos;s settings on the Lemon server and are never sent back to
-            the browser. Use an IAM user with read-only access to this bucket.
+            the browser. Saving also remembers them for your account only, so you can pick them in other projects. Use
+            an IAM user with read-only access to this bucket.
           </p>
         </div>
       </CardContent>

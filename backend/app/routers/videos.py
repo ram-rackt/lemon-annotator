@@ -16,7 +16,9 @@ from ..models import (
     ActivityPing,
     ActivityResult,
     AnnotationSave,
+    BatchResult,
     ClearResult,
+    KeyBatch,
     Project,
     ProjectPublic,
     ProjectReview,
@@ -24,9 +26,13 @@ from ..models import (
     ReviewList,
     ReviewVideo,
     SchemaField,
+    SkippedVideo,
+    SyncedList,
+    SyncedVideo,
     StreamUrl,
     SyncInfo,
     VideoAnnotation,
+    VideoBatch,
     VideoDetails,
     VideoItem,
     VideoList,
@@ -62,15 +68,17 @@ def list_videos(
     project: Project = Depends(project_access),
     store: Store = Depends(get_store),
 ):
-    """The video queue. Every listing is a sync: it reads the bucket and records the result."""
+    """The video queue: the videos found by the latest sync, with their annotations. The bucket itself
+    isn't listed here; only a sync someone asks for does that (see sync_storage)."""
     if not is_member(user, project):
         return flagged_queue(project, store)
-    return sync_videos(project, store)
+    return build_queue(project, store, synced_list(project, store))
 
 
 @router.post("/sync", response_model=VideoList)
 def sync_storage(project: Project = Depends(project_access), store: Store = Depends(get_store)):
-    """Re-read the bucket now (the "Sync storage" button)."""
+    """Re-read the bucket now ("Sync storage", or the queue's refresh button): the only way the queue
+    picks up videos added to or removed from the bucket."""
     return sync_videos(project, store)
 
 
@@ -97,14 +105,79 @@ def flagged_queue(project: Project, store: Store) -> VideoList:
     )
 
 
+def synced_list(project: Project, store: Store) -> SyncedList | None:
+    """The videos the latest sync found in the current bucket and folder; None until one is run (and after
+    the bucket or folder changes)."""
+    if not project.storage.is_configured or project.last_sync is None:
+        return None
+    synced = store.load_synced_list(project.id)
+    if synced is None:
+        return rebuild_synced_list(project, store)
+    if synced.bucket != project.storage.bucket or synced.prefix != project.storage.normalized_prefix:
+        return None
+    return synced
+
+
+def rebuild_synced_list(project: Project, store: Store) -> SyncedList | None:
+    """Projects synced before the list was kept only stored the counts. Rebuild it as that sync saw it, once:
+    the videos in the bucket that were already there then (later uploads wait for the next sync)."""
+    assert project.last_sync is not None
+    try:
+        objects, truncated = s3_service.list_videos(project.storage, get_settings().max_list_keys)
+    except AppError as exc:
+        log.warning("Could not rebuild the synced list of %s: %s", project.id, exc.message)
+        return None
+    cutoff = project.last_sync.synced_at
+    synced = SyncedList(
+        bucket=project.storage.bucket,
+        prefix=project.storage.normalized_prefix,
+        truncated=truncated,
+        videos=[
+            SyncedVideo(key=o.key, size=o.size, last_modified=o.last_modified)
+            for o in objects
+            if o.last_modified <= cutoff
+        ],
+    )
+    store.save_synced_list(project.id, synced)
+    return synced
+
+
 def sync_videos(project: Project, store: Store) -> VideoList:
-    project_id = project.id
+    """List the bucket, keep what was found, and return the queue built from it."""
     objects, truncated = s3_service.list_videos(project.storage, get_settings().max_list_keys)
-    # Removed videos are left out of everything, including the counts below.
+    synced = SyncedList(
+        bucket=project.storage.bucket,
+        prefix=project.storage.normalized_prefix,
+        truncated=truncated,
+        videos=[SyncedVideo(key=o.key, size=o.size, last_modified=o.last_modified) for o in objects],
+    )
+    # Removed videos are left out of the counts, like everywhere else.
+    kept = [o for o in objects if o.key not in project.removed_keys]
+    # "New" = uploaded after the previous sync, judged by S3's own LastModified time.
+    previous = project.last_sync
+    sync = SyncInfo(
+        video_count=len(kept),
+        synced_at=utcnow(),
+        new_count=sum(1 for o in kept if o.last_modified > previous.synced_at) if previous else None,
+        total_bytes=sum(o.size for o in kept),
+        truncated=truncated,
+    )
+    with store.lock(project.id):
+        store.save_synced_list(project.id, synced)
+        fresh = store.get(project.id)
+        fresh.last_sync = sync
+        store.save(fresh, touch=False)
+    return build_queue(fresh, store, synced)
+
+
+def build_queue(project: Project, store: Store, synced: SyncedList | None) -> VideoList:
+    """The queue: the synced videos (minus removed ones) with their saved state, plus annotated videos the
+    sync didn't find. Never touches S3."""
     removed = project.removed_keys
-    objects = [o for o in objects if o.key not in removed]
+    objects = [v for v in synced.videos if v.key not in removed] if synced else []
+    truncated = synced.truncated if synced else False
     index = {
-        k: e for k, e in store.load_index(project_id).items() if belongs_to(e.bucket, project) and k not in removed
+        k: e for k, e in store.load_index(project.id).items() if belongs_to(e.bucket, project) and k not in removed
     }
 
     videos: list[VideoItem] = []
@@ -124,8 +197,8 @@ def sync_videos(project: Project, store: Store) -> VideoList:
                 updated_by=entry.updated_by if entry else None,
             )
         )
-    # Never silently hide work: surface annotations whose video isn't in the listing. When the
-    # listing was truncated we can't tell whether they still exist, so don't call them missing.
+    # Never silently hide work: surface annotations whose video the sync didn't find. Before any sync, or
+    # when the listing was truncated, we can't tell whether they still exist, so don't call them missing.
     for key, entry in index.items():
         if key in seen or not key.startswith(project.storage.normalized_prefix):
             continue
@@ -137,35 +210,27 @@ def sync_videos(project: Project, store: Store) -> VideoList:
                 event_count=entry.event_count,
                 annotated_at=entry.updated_at,
                 updated_by=entry.updated_by,
-                missing=not truncated,
+                missing=synced is not None and not truncated,
             )
         )
-
-    # "New" = uploaded after the previous sync, judged by S3's own LastModified time, so no list
-    # of previously seen keys has to be stored.
-    previous = project.last_sync
-    sync = SyncInfo(
-        video_count=len(objects),
-        synced_at=utcnow(),
-        new_count=sum(1 for o in objects if o.last_modified > previous.synced_at) if previous else None,
-        total_bytes=sum(o.size for o in objects),
-        truncated=truncated,
-    )
-    try:
-        with store.lock(project_id):
-            fresh = store.get(project_id)
-            fresh.last_sync = sync
-            store.save(fresh, touch=False)
-    except AppError as exc:  # recording the sync must never fail the listing itself
-        log.warning("Could not record sync for %s: %s", project_id, exc)
 
     return VideoList(
         videos=videos,
         truncated=truncated,
         bucket=project.storage.bucket,
         prefix=project.storage.normalized_prefix,
-        sync=sync,
+        sync=project.last_sync if synced else None,
     )
+
+
+def recount(project: Project, store: Store) -> None:
+    """Keep the latest sync's totals (the dashboard's progress) in step after videos are deleted or restored."""
+    synced = synced_list(project, store)
+    if synced and project.last_sync:
+        kept = [v for v in synced.videos if v.key not in project.removed_keys]
+        project.last_sync = project.last_sync.model_copy(
+            update={"video_count": len(kept), "total_bytes": sum(v.size for v in kept)}
+        )
 
 
 @router.get("/videos/stream-url", response_model=StreamUrl)
@@ -288,6 +353,7 @@ def remove_video(
         fresh = store.get(project_id)
         if key not in fresh.removed_keys:
             fresh.removed_videos.append(RemovedVideo(key=key, bucket=fresh.storage.bucket, removed_by=user.name))
+            recount(fresh, store)
             store.save(fresh, touch=False)
     return ClearResult(key=key, cleared=moved is not None, moved_to=str(moved) if moved else None)
 
@@ -304,6 +370,86 @@ def restore_video(
         project.removed_videos = [
             r for r in project.removed_videos if not (r.key == key and r.bucket == project.storage.bucket)
         ]
+        recount(project, store)
+        store.save(project, touch=False)
+    return to_public(project, store)
+
+
+# --------------------------------------------------------------------------- #
+# Several videos at once (selected in the queue)
+# --------------------------------------------------------------------------- #
+
+
+def split_unchanged(store: Store, project: Project, batch: VideoBatch) -> tuple[list[str], list[SkippedVideo]]:
+    """The selected videos still at the version the client saw, and the ones someone saved since (left
+    alone, like a single clear refuses). One read of the index, not one per video. Call under the lock."""
+    for ref in batch.videos:
+        require_video_key(project, ref.key, inside_prefix=False)
+    index = store.load_index(project.id)
+    ok: list[str] = []
+    skipped: list[SkippedVideo] = []
+    for ref in {r.key: r for r in batch.videos}.values():  # each video once
+        entry = index.get(ref.key)
+        if ref.revision is not None and entry is not None and entry.revision != ref.revision:
+            skipped.append(SkippedVideo(key=ref.key, updated_by=entry.updated_by))
+        else:
+            ok.append(ref.key)
+    return ok, skipped
+
+
+@router.post("/annotations/clear-many", response_model=BatchResult)
+def clear_many(
+    project_id: str,
+    batch: VideoBatch,
+    user: User = Depends(current_user),
+    project: Project = Depends(project_access),
+    store: Store = Depends(get_store),
+):
+    """Clear the annotations of several videos (see clear_annotation). Videos someone saved after the client
+    last saw them are skipped and reported."""
+    with store.lock(project_id):
+        ok, skipped = split_unchanged(store, project, batch)
+        if ok:
+            store.clear_annotations(project_id, ok, by=user.name)
+    return BatchResult(done=ok, skipped=skipped)
+
+
+@router.post("/videos/remove-many", response_model=BatchResult)
+def remove_many(
+    project_id: str,
+    batch: VideoBatch,
+    user: User = Depends(current_user),
+    project: Project = Depends(project_access),
+    store: Store = Depends(get_store),
+):
+    """Delete several videos from the project (see remove_video). Videos someone saved after the client
+    last saw them are skipped and reported."""
+    with store.lock(project_id):
+        ok, skipped = split_unchanged(store, project, batch)
+        if ok:
+            store.clear_annotations(project_id, ok, by=user.name)
+            fresh = store.get(project_id)
+            already = fresh.removed_keys
+            fresh.removed_videos += [
+                RemovedVideo(key=key, bucket=fresh.storage.bucket, removed_by=user.name)
+                for key in ok
+                if key not in already
+            ]
+            recount(fresh, store)
+            store.save(fresh, touch=False)
+    return BatchResult(done=ok, skipped=skipped)
+
+
+@router.post("/videos/restore-many", response_model=ProjectPublic)
+def restore_many(project_id: str, batch: KeyBatch, store: Store = Depends(get_store)):
+    """Put several deleted videos back in the queue (the "Undo" after deleting a selection)."""
+    keys = set(batch.keys)
+    with store.lock(project_id):
+        project = store.get(project_id)
+        project.removed_videos = [
+            r for r in project.removed_videos if not (r.key in keys and r.bucket == project.storage.bucket)
+        ]
+        recount(project, store)
         store.save(project, touch=False)
     return to_public(project, store)
 

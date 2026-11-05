@@ -68,11 +68,6 @@ export const isFlagged = (f: SchemaField, value: LabelValue | undefined) =>
 export const clearedValue = (f: SchemaField): LabelValue =>
   f.type === "checkbox" ? false : (findOption(f, REVIEW_CLEARED) ?? null);
 
-/** Does this schema record per-timestamp events? Yes when it has event types or per-timestamp
- * fields, and also when it has no whole-video fields at all (plain timestamp marking). */
-export const hasEventSection = (schema: LabelSchema) =>
-  schema.event_types.length > 0 || eventFields(schema).length > 0 || videoFields(schema).length === 0;
-
 /* ------------------------------------------------------------------ values ---------------------------- */
 
 function emptyValue(f: SchemaField): LabelValue {

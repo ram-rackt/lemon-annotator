@@ -19,7 +19,6 @@ import {
   type DraftValues,
   draftValue,
   eventFields,
-  hasEventSection,
   hotkeyTargets,
   missingRequired,
   missingRequiredLabels,
@@ -85,7 +84,6 @@ export function TaggingPanel(props: Props) {
   );
   const videoLevel = videoFields(schema);
   const eventLevel = eventFields(schema);
-  const withEvents = hasEventSection(schema);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -108,7 +106,7 @@ export function TaggingPanel(props: Props) {
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon-xs"
+                  size="icon"
                   onClick={props.onCollapse}
                   aria-label="Hide tag panel"
                   className="hidden lg:inline-flex"
@@ -140,103 +138,96 @@ export function TaggingPanel(props: Props) {
           </section>
         )}
 
-        {/* Per-timestamp values: recorded with every capture */}
-        {withEvents && (
-          <section
-            className={cn("space-y-5 p-4", videoLevel.length > 0 && !editing && "border-t")}
-            aria-label="Timestamp event"
-          >
-            {videoLevel.length > 0 && !editing && (
-              <SectionHeading title="Timestamp event" hint="Recorded with each capture" />
-            )}
+        {/* Per-timestamp values: recorded with every capture (just the time and a note when the
+            schema has only whole-video fields) */}
+        <section
+          className={cn("space-y-5 p-4", videoLevel.length > 0 && !editing && "border-t")}
+          aria-label="Timestamp event"
+        >
+          {videoLevel.length > 0 && !editing && (
+            <SectionHeading title="Timestamp event" hint="Recorded with each capture" />
+          )}
 
-            {schema.event_types.length > 0 && (
-              <div className="space-y-2">
-                <Label className="flex items-center justify-between">
-                  Event type
-                  <span className="text-[11px] font-normal text-muted-foreground">
-                    <Kbd>⇧</Kbd> + number
-                  </span>
-                </Label>
-                <Select
-                  value={draft.event_name ?? NONE}
-                  onValueChange={(v) => onDraftChange({ ...draft, event_name: v === NONE ? null : v })}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select event type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE}>
-                      <span className="text-muted-foreground">Unlabeled</span>
-                    </SelectItem>
-                    {schema.event_types.map((t, i) => (
-                      <SelectItem key={t} value={t}>
-                        <span
-                          className="size-2 rounded-full"
-                          style={{ backgroundColor: eventColor(t, schema.event_types) }}
-                        />
-                        {t}
-                        {i < 9 && (
-                          <span className="ml-auto pl-4 font-mono text-[10px] text-muted-foreground">⇧{i + 1}</span>
-                        )}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {eventLevel.map((f) => (
-              <FieldInput
-                key={f.key}
-                field={f}
-                value={draftValue(draft, f)}
-                onChange={(v) => onDraftChange(setDraftValue(draft, f, v))}
-                hotkey={hotkey(f)}
-                missing={missing.has(f.key)}
-              />
-            ))}
-
+          {schema.event_types.length > 0 && (
             <div className="space-y-2">
-              <Label htmlFor="note">
-                Note <span className="font-normal text-muted-foreground">(optional)</span>
+              <Label className="flex items-center justify-between">
+                Event type
+                <span className="text-[11px] font-normal text-muted-foreground">
+                  <Kbd>⇧</Kbd> + number
+                </span>
               </Label>
-              <Textarea
-                id="note"
-                rows={2}
-                value={draft.note}
-                onChange={(e) => onDraftChange({ ...draft, note: e.target.value })}
-                placeholder="Anything worth remembering…"
-                className="resize-none"
+              <Select
+                value={draft.event_name ?? NONE}
+                onValueChange={(v) => onDraftChange({ ...draft, event_name: v === NONE ? null : v })}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select event type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>
+                    <span className="text-muted-foreground">Unlabeled</span>
+                  </SelectItem>
+                  {schema.event_types.map((t, i) => (
+                    <SelectItem key={t} value={t}>
+                      <span
+                        className="size-2 rounded-full"
+                        style={{ backgroundColor: eventColor(t, schema.event_types) }}
+                      />
+                      {t}
+                      {i < 9 && (
+                        <span className="ml-auto pl-4 font-mono text-[10px] text-muted-foreground">⇧{i + 1}</span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {eventLevel.map((f) => (
+            <FieldInput
+              key={f.key}
+              field={f}
+              value={draftValue(draft, f)}
+              onChange={(v) => onDraftChange(setDraftValue(draft, f, v))}
+              hotkey={hotkey(f)}
+              missing={missing.has(f.key)}
+            />
+          ))}
+
+          <div className="space-y-2">
+            <Label htmlFor="note">
+              Note <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
+            <Textarea
+              id="note"
+              rows={2}
+              value={draft.note}
+              onChange={(e) => onDraftChange({ ...draft, note: e.target.value })}
+              placeholder="Anything worth remembering…"
+              className="resize-none"
+            />
+          </div>
+
+          <div className="grid gap-2.5 rounded-lg border border-dashed p-3">
+            <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              Pause video on capture
+              <Switch
+                size="sm"
+                checked={prefs.pauseOnCapture}
+                onCheckedChange={(v) => props.onPrefsChange({ ...prefs, pauseOnCapture: v })}
               />
-            </div>
-
-            <div className="grid gap-2.5 rounded-lg border border-dashed p-3">
-              <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                Pause video on capture
-                <Switch
-                  size="sm"
-                  checked={prefs.pauseOnCapture}
-                  onCheckedChange={(v) => props.onPrefsChange({ ...prefs, pauseOnCapture: v })}
-                />
-              </label>
-              <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                Keep values after capture
-                <Switch
-                  size="sm"
-                  checked={prefs.keepValues}
-                  onCheckedChange={(v) => props.onPrefsChange({ ...prefs, keepValues: v })}
-                />
-              </label>
-            </div>
-          </section>
-        )}
-
-        {videoLevel.length === 0 && !withEvents && (
-          <p className="p-6 text-center text-sm text-muted-foreground">
-            No labels defined yet. Add them in <strong>Settings → Label schema</strong>.
-          </p>
-        )}
+            </label>
+            <label className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              Keep values after capture
+              <Switch
+                size="sm"
+                checked={prefs.keepValues}
+                onCheckedChange={(v) => props.onPrefsChange({ ...prefs, keepValues: v })}
+              />
+            </label>
+          </div>
+        </section>
       </div>
 
       <Separator />
@@ -266,16 +257,14 @@ export function TaggingPanel(props: Props) {
             </div>
           </div>
         ) : (
-          withEvents && (
-            <Button size="lg" onClick={props.onCapture} disabled={disabled} className="h-11 w-full text-[15px]">
-              <Crosshair /> Capture Current Timestamp
-              <Kbd className="ml-auto bg-primary-foreground/15 text-primary-foreground">↵</Kbd>
-            </Button>
-          )
+          <Button size="lg" onClick={props.onCapture} disabled={disabled} className="h-11 w-full text-[15px]">
+            <Crosshair /> Capture Current Timestamp
+            <Kbd className="ml-auto bg-primary-foreground/15 text-primary-foreground">↵</Kbd>
+          </Button>
         )}
         <div className="flex items-center justify-between text-xs">
           <StatusLine dirty={props.dirty} status={props.status} savedAt={props.savedAt} />
-          {withEvents && <span className="text-muted-foreground tabular-nums">{props.eventCount} events</span>}
+          <span className="text-muted-foreground tabular-nums">{props.eventCount} events</span>
         </div>
         <div className="grid grid-cols-[auto_1fr] gap-2">
           <Button variant="outline" onClick={props.onSave} disabled={disabled || props.saving} title="Save (Ctrl+S)">

@@ -61,7 +61,6 @@ import {
   missingRequired,
   draftHasValues,
   draftValue,
-  hasEventSection,
   missingRequiredLabels,
   reconcileDraft,
   clearedValue,
@@ -455,7 +454,6 @@ function Workspace({
     setDirty(true);
     bumpVersion();
   };
-  const withEvents = hasEventSection(schema);
   const coachField = reviewField(schema, project.settings.coach_review_field);
   // A coach from another workspace: the queue holds only flagged videos, and storage stays hidden.
   const coachView = project.access === "coach";
@@ -673,7 +671,7 @@ function Workspace({
       return;
     }
     // Per-timestamp selections only count once captured. Don't let them vanish silently.
-    if (withEvents && !editingId && events.length === 0 && draftHasValues(draft, schema)) {
+    if (!editingId && events.length === 0 && draftHasValues(draft, schema)) {
       toast.error("These timestamp values haven't been captured yet", {
         description: "Press Enter (Capture) to record them at the current time, or discard them.",
         action: { label: "Discard", onClick: () => setDraft(emptyDraft(schema)) },
@@ -1204,7 +1202,6 @@ function Workspace({
         case "Enter":
         case "m":
         case "M":
-          if (!withEvents) return false;
           return editingId ? updateEvent() : capture();
         case "Delete":
         case "Backspace":
@@ -1384,7 +1381,7 @@ function Workspace({
           )}
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={() => goRelative(-1)} aria-label="Previous video">
+              <Button variant="ghost" size="icon" onClick={() => goRelative(-1)} aria-label="Previous video">
                 <ChevronUp />
               </Button>
             </TooltipTrigger>
@@ -1392,7 +1389,7 @@ function Workspace({
           </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={() => goRelative(1)} aria-label="Next video">
+              <Button variant="ghost" size="icon" onClick={() => goRelative(1)} aria-label="Next video">
                 <ChevronDown />
               </Button>
             </TooltipTrigger>
@@ -1402,7 +1399,7 @@ function Workspace({
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 onClick={() => setShowShortcuts(true)}
                 aria-label="Keyboard shortcuts"
               >
@@ -1432,14 +1429,8 @@ function Workspace({
 
         <div className="flex h-9 shrink-0 items-center justify-between border-b px-4 text-xs">
           <span className="font-medium">
-            {withEvents ? (
-              <>
-                Timeline{" "}
-                <span className="ml-1 text-muted-foreground tabular-nums">{ready ? events.length : "–"} events</span>
-              </>
-            ) : (
-              "Video labels"
-            )}
+            Timeline{" "}
+            <span className="ml-1 text-muted-foreground tabular-nums">{ready ? events.length : "–"} events</span>
           </span>
           <EventLegend eventTypes={schema.event_types} />
         </div>
@@ -1455,18 +1446,16 @@ function Workspace({
           ) : (
             <>
               <LabelsSummary schema={schema} labels={labels} />
-              {withEvents && (
-                <EventList
-                  events={events}
-                  schema={schema}
-                  timeStore={timeStore}
-                  selectedId={editingId}
-                  flashId={flashId}
-                  onSeek={seekTo}
-                  onEdit={startEdit}
-                  onDelete={deleteEvent}
-                />
-              )}
+              <EventList
+                events={events}
+                schema={schema}
+                timeStore={timeStore}
+                selectedId={editingId}
+                flashId={flashId}
+                onSeek={seekTo}
+                onEdit={startEdit}
+                onDelete={deleteEvent}
+              />
             </>
           )}
         </div>
@@ -1509,7 +1498,7 @@ function Workspace({
             onCapture={editingId ? updateEvent : capture}
             onSave={saveOnly}
             onSaveNext={saveAndNext}
-            canCapture={ready && withEvents}
+            canCapture={ready}
             dirty={dirty}
             saving={saveMut.isPending}
           />

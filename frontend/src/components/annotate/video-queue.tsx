@@ -205,7 +205,7 @@ export function VideoQueue({
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon-xs"
+                    size="icon"
                     onClick={() => (selecting ? stopSelecting() : onSelectionChange(new Set()))}
                     aria-label={selecting ? "Stop selecting" : "Select videos"}
                     aria-pressed={selecting}
@@ -223,7 +223,7 @@ export function VideoQueue({
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon-xs"
+                  size="icon"
                   onClick={onRefresh}
                   disabled={refreshing}
                   aria-label={limited ? "Refresh" : "Sync storage"}
@@ -242,7 +242,7 @@ export function VideoQueue({
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon-xs"
+                    size="icon"
                     onClick={onCollapse}
                     aria-label="Hide queue"
                     className="hidden lg:inline-flex"

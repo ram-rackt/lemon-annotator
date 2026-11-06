@@ -56,27 +56,28 @@ export function CreateProjectDialog({ trigger }: { trigger?: React.ReactNode }) 
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="p-6 sm:max-w-lg">
         <form
-          className="grid gap-4"
+          className="grid gap-5"
           onSubmit={(e) => {
             e.preventDefault();
             if (name.trim()) create.mutate();
           }}
         >
-          <DialogHeader>
-            <DialogTitle>Create project</DialogTitle>
-            <DialogDescription>A project points at one S3 folder and has its own label schema.</DialogDescription>
+          <DialogHeader className="gap-1.5">
+            <DialogTitle className="text-lg font-semibold">New project</DialogTitle>
+            <DialogDescription>Each project uses one S3 folder and its own label schema.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-2">
             <Label htmlFor="project-name">Name</Label>
             <Input
               id="project-name"
               autoFocus
-              placeholder="e.g. Badminton rallies — Q3"
+              placeholder="e.g. Badminton rallies"
               value={name}
               maxLength={100}
               onChange={(e) => setName(e.target.value)}
+              className="h-10"
             />
           </div>
           <div className="grid gap-2">
@@ -87,16 +88,17 @@ export function CreateProjectDialog({ trigger }: { trigger?: React.ReactNode }) 
               id="project-description"
               rows={3}
               maxLength={500}
-              placeholder="What is being labeled and why?"
+              placeholder="What this project is for"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              className="min-h-24 resize-none"
             />
           </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+          <DialogFooter className="-mx-6 -mb-6 px-6 py-4">
+            <Button type="button" variant="outline" size="lg" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim() || create.isPending}>
+            <Button type="submit" size="lg" disabled={!name.trim() || create.isPending}>
               {create.isPending && <Spinner />} Create project
             </Button>
           </DialogFooter>

@@ -24,9 +24,9 @@ export function Splash() {
       onAnimationEnd={(e) => e.target === e.currentTarget && setVisible(false)}
       className="splash-backdrop fixed inset-0 z-[100] grid cursor-default place-items-center bg-background"
     >
-      <div className="splash-logo flex items-center gap-4 font-semibold tracking-tight">
-        <LogoMark className="size-16 rounded-2xl shadow-[0_12px_40px_-12px_rgb(250_204_21/0.7)]" />
-        <span className="text-4xl">{APP_NAME}</span>
+      <div className="splash-logo flex items-center gap-6 font-semibold tracking-tight">
+        <LogoMark className="size-24 rounded-3xl shadow-[0_18px_60px_-18px_rgb(250_204_21/0.7)]" />
+        <span className="text-[3.5rem] leading-none">{APP_NAME}</span>
       </div>
     </div>
   );

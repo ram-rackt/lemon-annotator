@@ -68,6 +68,8 @@ export function EventList({ events, schema, timeStore, selectedId, flashId, onSe
       {events.map((ev, i) => {
         const trueBoxes = Object.entries(ev.checkboxes).filter(([, v]) => v);
         const attrs = Object.entries(ev.attributes).filter(([, v]) => !isEmptyValue(v));
+        // Nothing but the time (and maybe a note): the note stands on its own.
+        const bare = trueBoxes.length + attrs.length === 0 && !ev.event_name && schema.event_types.length === 0;
         const selected = ev.id === selectedId;
         return (
           <div
@@ -114,10 +116,15 @@ export function EventList({ events, schema, timeStore, selectedId, flashId, onSe
                   <span className="text-muted-foreground">{labels[k] ?? k}:</span> {formatValue(v)}
                 </Badge>
               ))}
-              {trueBoxes.length + attrs.length === 0 && !ev.event_name && schema.event_types.length === 0 && (
-                <span className="text-muted-foreground italic">No values</span>
+              {ev.note ? (
+                bare ? (
+                  <span className="truncate">{ev.note}</span>
+                ) : (
+                  <span className="truncate text-xs text-muted-foreground">— {ev.note}</span>
+                )
+              ) : (
+                bare && <span className="text-muted-foreground italic">No values</span>
               )}
-              {ev.note && <span className="truncate text-xs text-muted-foreground">— {ev.note}</span>}
             </button>
             <div className="flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
               <Button variant="ghost" size="icon-xs" onClick={() => onEdit(ev)} aria-label="Edit event">

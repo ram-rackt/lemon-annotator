@@ -8,12 +8,24 @@ import { cn } from "@/lib/utils";
 
 export const APP_NAME = "Lemon";
 
+/** The yellow lemon tile. Size it with `className` (the icon scales with it). */
+export function LogoMark({ className }: { className?: string }) {
+  return (
+    <span
+      className={cn(
+        "grid size-9 place-items-center rounded-xl bg-yellow-300 text-yellow-950 shadow-sm ring-1 ring-yellow-500/40 ring-inset",
+        className,
+      )}
+    >
+      <Citrus className="size-[56%]" strokeWidth={2.25} />
+    </span>
+  );
+}
+
 export function Logo({ className }: { className?: string }) {
   return (
     <Link href="/" className={cn("flex items-center gap-2.5 font-semibold tracking-tight", className)}>
-      <span className="grid size-9 place-items-center rounded-xl bg-yellow-300 text-yellow-950 shadow-sm ring-1 ring-yellow-500/40 ring-inset">
-        <Citrus className="size-5" strokeWidth={2.25} />
-      </span>
+      <LogoMark />
       <span className="text-lg">{APP_NAME}</span>
     </Link>
   );

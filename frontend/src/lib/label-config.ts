@@ -232,9 +232,7 @@ export function parseLabelConfig(xml: string, existing?: LabelSchema): ParseResu
     }
   }
 
-  if (!fields.length && !eventTypes.length && !errors.length) {
-    errors.push("No supported controls found. Add <Choices>, <TextArea> or <TimelineLabels> elements.");
-  }
+  // No controls is fine: timestamps are then captured with just a note.
   return errors.length
     ? { schema: null, errors, warnings }
     : { schema: { event_types: eventTypes, fields }, errors, warnings };

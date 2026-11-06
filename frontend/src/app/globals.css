@@ -142,3 +142,42 @@
     display: none !important;
   }
 }
+
+/* Splash on opening the home page (components/splash.tsx): the logo fades in, holds and fades out,
+   then the backdrop fades away to reveal the page. 3s in all. */
+@keyframes splash-logo {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  25%,
+  70% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  90%,
+  100% {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+@keyframes splash-backdrop {
+  0%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.splash-backdrop {
+  animation: splash-backdrop 3s ease-in-out forwards;
+}
+.splash-logo {
+  animation: splash-logo 3s ease-in-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .splash-logo {
+    transform: none !important;
+  }
+}

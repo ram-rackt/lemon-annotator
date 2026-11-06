@@ -82,6 +82,7 @@ export function StorageForm({ project }: { project: Project }) {
   const [clearSecret, setClearSecret] = useState(false);
   const [clearToken, setClearToken] = useState(false);
   const [showSecret, setShowSecret] = useState(false);
+  const [showKeyId, setShowKeyId] = useState(false);
   const [advanced, setAdvanced] = useState(Boolean(project.storage.endpoint_url || project.storage.has_session_token));
   const [testResult, setTestResult] = useState<{ ok: ConnectionTestResult } | { error: unknown } | null>(null);
   const update = useUpdateProject(project.id);
@@ -290,18 +291,29 @@ export function StorageForm({ project }: { project: Project }) {
         )}
         <div className="-mt-2 grid gap-4 sm:grid-cols-2">
           <Field label="Access Key ID" htmlFor="akid" hint="Leave both keys empty to use your local AWS profile.">
-            <Input
-              id="akid"
-              placeholder="AKIA…"
-              value={form.access_key_id}
-              onChange={(e) => {
-                setUseSaved(false);
-                set({ access_key_id: e.target.value.trim() });
-              }}
-              autoComplete="off"
-              spellCheck={false}
-              className="font-mono"
-            />
+            <div className="relative">
+              <Input
+                id="akid"
+                type={showKeyId ? "text" : "password"}
+                placeholder="AKIA…"
+                value={form.access_key_id}
+                onChange={(e) => {
+                  setUseSaved(false);
+                  set({ access_key_id: e.target.value.trim() });
+                }}
+                autoComplete="off"
+                spellCheck={false}
+                className="pr-9 font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => setShowKeyId((s) => !s)}
+                className="absolute inset-y-0 right-0 grid w-9 place-items-center text-muted-foreground hover:text-foreground"
+                aria-label={showKeyId ? "Hide access key ID" : "Show access key ID"}
+              >
+                {showKeyId ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
           </Field>
           <Field
             label="Secret Access Key"

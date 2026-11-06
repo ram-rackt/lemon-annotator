@@ -904,14 +904,6 @@ function Workspace({
     exitEdit();
   };
 
-  const retime = () => {
-    if (!editingId || !playerRef.current) return;
-    const t = playerRef.current.getTime();
-    const id = editingId;
-    mutateEvents((prev) => prev.map((e) => (e.id === id ? { ...e, timestamp: round3(t), frame: frameAt(t, fps) } : e)));
-    toast.success(`Moved to ${formatTime(t)}`, { duration: 1500 });
-  };
-
   const deleteEvent = (ev: AnnotationEvent) => {
     const key = activeKey;
     mutateEvents((prev) => prev.filter((e) => e.id !== ev.id));
@@ -1478,7 +1470,6 @@ function Workspace({
             disabled={!ready}
             onCapture={capture}
             onUpdate={updateEvent}
-            onRetime={retime}
             onCancelEdit={exitEdit}
             onDelete={() => editing && deleteEvent(editing.event)}
             dirty={dirty}

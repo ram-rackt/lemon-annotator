@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, Crosshair, PanelRightClose, Pencil, Save, SkipForward, Trash2, X } from "lucide-react";
+import { Crosshair, PanelRightClose, Pencil, Save, SkipForward, Trash2, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -53,7 +53,6 @@ interface Props {
   disabled: boolean;
   onCapture: () => void;
   onUpdate: () => void;
-  onRetime: () => void;
   onCancelEdit: () => void;
   onDelete: () => void;
   // footer
@@ -239,15 +238,7 @@ export function TaggingPanel(props: Props) {
               <Save /> Update event
               <Kbd className="ml-auto bg-primary-foreground/15 text-primary-foreground">↵</Kbd>
             </Button>
-            <div className="grid grid-cols-3 gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={props.onRetime}
-                title="Move this event to the current playhead"
-              >
-                <Clock /> Retime
-              </Button>
+            <div className="grid grid-cols-2 gap-2">
               <Button variant="outline" size="sm" onClick={props.onCancelEdit}>
                 <X /> Cancel
               </Button>

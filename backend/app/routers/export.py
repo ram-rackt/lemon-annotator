@@ -38,6 +38,8 @@ def _video_entry(ann: VideoAnnotation) -> dict:
                 "checkboxes": ev.checkboxes,
                 "attributes": ev.attributes,
                 "note": ev.note,
+                # {x, y, width, height} as fractions of the frame (top-left origin), or null.
+                "box": ev.box.model_dump() if ev.box else None,
             }
             for ev in ann.events
         ],

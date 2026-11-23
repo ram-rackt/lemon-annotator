@@ -1,6 +1,17 @@
 "use client";
 
-import { ChevronFirst, ChevronLast, Maximize, Pause, Play, Rewind, FastForward, Volume2, VolumeX } from "lucide-react";
+import {
+  ChevronFirst,
+  ChevronLast,
+  FastForward,
+  Maximize,
+  Pause,
+  Play,
+  Rewind,
+  SquareDashed,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -47,8 +58,18 @@ interface Props {
   onMarkerClick: (ev: AnnotationEvent) => void;
   onMediaError: (error: MediaError | null) => void;
   onDuration?: (d: number) => void;
+  onPlay?: () => void;
   overlay?: React.ReactNode;
+  /** Drawn exactly over the picture (inside any letterbox bars), e.g. bounding boxes. */
+  frameLayer?: React.ReactNode;
+  /** The bounding box button: shown when `onToggleBoxMode` is given, highlighted while `boxMode`. */
+  boxMode?: boolean;
+  onToggleBoxMode?: () => void;
+  /** What the box button does right now (its tooltip). */
+  boxLabel?: string;
 }
+
+type FrameRect = { left: number; top: number; width: number; height: number };
 
 export function VideoPlayer({
   ref,
@@ -63,7 +84,12 @@ export function VideoPlayer({
   onMarkerClick,
   onMediaError,
   onDuration,
+  onPlay,
   overlay,
+  frameLayer,
+  boxMode = false,
+  onToggleBoxMode,
+  boxLabel,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -76,9 +102,10 @@ export function VideoPlayer({
   const lastKeyRef = useRef<string | null>(null);
   const lastSrcRef = useRef<string | null>(null);
   const playingRef = useRef(false);
-  const callbacks = useRef({ onMediaError, onDuration });
+  const [frame, setFrame] = useState<FrameRect | null>(null);
+  const callbacks = useRef({ onMediaError, onDuration, onPlay });
   useEffect(() => {
-    callbacks.current = { onMediaError, onDuration };
+    callbacks.current = { onMediaError, onDuration, onPlay };
   });
 
   const v = () => videoRef.current;
@@ -135,6 +162,7 @@ export function VideoPlayer({
     const onPlay = () => {
       playingRef.current = true;
       setPaused(false);
+      callbacks.current.onPlay?.();
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(tick);
     };
@@ -198,6 +226,31 @@ export function VideoPlayer({
       video.removeEventListener("error", onError);
     };
   }, [timeStore]);
+
+  // Where the picture sits inside the <video> element: object-contain letterboxes it, and the frame
+  // layer must line up with the picture itself.
+  useEffect(() => {
+    const video = v();
+    if (!video) return;
+    const measure = () => {
+      const { videoWidth: vw, videoHeight: vh, clientWidth: cw, clientHeight: ch } = video;
+      if (!vw || !vh || !cw || !ch) return setFrame(null);
+      const scale = Math.min(cw / vw, ch / vh);
+      const width = vw * scale;
+      const height = vh * scale;
+      setFrame({ left: video.offsetLeft + (cw - width) / 2, top: video.offsetTop + (ch - height) / 2, width, height });
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(video);
+    video.addEventListener("loadedmetadata", measure);
+    video.addEventListener("resize", measure); // the picture's own size changed
+    measure();
+    return () => {
+      observer.disconnect();
+      video.removeEventListener("loadedmetadata", measure);
+      video.removeEventListener("resize", measure);
+    };
+  }, []);
 
   const seek = useCallback(
     (t: number) => {
@@ -281,6 +334,11 @@ export function VideoPlayer({
           onClick={() => handle.toggle()}
           onDoubleClick={fullscreen}
         />
+        {frameLayer && frame && src && !overlay && (
+          <div className="absolute" style={frame}>
+            {frameLayer}
+          </div>
+        )}
         {buffering && src && !overlay && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
             <Spinner className="size-7 text-white/80" />
@@ -319,6 +377,16 @@ export function VideoPlayer({
         <TimeReadout timeStore={timeStore} duration={duration} fps={fps} />
 
         <div className="ml-auto flex items-center gap-1">
+          {onToggleBoxMode && (
+            <ControlButton
+              label={boxLabel ?? (boxMode ? "Stop drawing boxes" : "Draw a bounding box")}
+              kbd="B"
+              onClick={onToggleBoxMode}
+              active={boxMode}
+            >
+              <SquareDashed />
+            </ControlButton>
+          )}
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -360,11 +428,14 @@ function ControlButton({
   label,
   kbd,
   onClick,
+  active,
   children,
 }: {
   label: string;
   kbd?: string;
   onClick: () => void;
+  /** A toggle that's on (e.g. box mode). */
+  active?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -374,8 +445,13 @@ function ControlButton({
           variant="ghost"
           size="icon-sm"
           aria-label={label}
+          aria-pressed={active}
           onClick={onClick}
-          className="text-white/80 hover:bg-white/10 hover:text-white dark:hover:bg-white/10"
+          className={cn(
+            "text-white/80 hover:bg-white/10 hover:text-white dark:hover:bg-white/10",
+            active &&
+              "bg-yellow-300 text-yellow-950 hover:bg-yellow-200 hover:text-yellow-950 dark:hover:bg-yellow-200",
+          )}
         >
           {children}
         </Button>

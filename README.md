@@ -245,6 +245,7 @@ grouped by project; see [Workspaces and coaches](#workspaces-and-coaches).
 | `J` / `L` | Back / forward by the skip interval (default 5 s) |
 | `[` / `]` | Slower / faster |
 | `Enter` / `M` | Capture timestamp, or update the event being edited |
+| `B` | Draw a bounding box on the paused frame (`Esc` stops); it's saved with the next capture. With a box drawn, `B` saves it and starts another on the same frame (each box is its own timeline event, in its own colour) |
 | `1`–`9` | Toggle the first nine checkboxes / choice options |
 | `Shift` + `1`–`9` | Set event type (`Shift` + `0` clears it) |
 | `Esc` / `Delete` | Cancel editing / delete the event being edited |
@@ -297,13 +298,17 @@ The schema can also be pasted as a [Label Studio](https://labelstud.io/tags/) co
           "event_name": "Smash",
           "checkboxes": { "forehand": true },
           "attributes": { "court_side": "Left" },
-          "note": ""
+          "note": "",
+          "box": { "x": 0.42, "y": 0.18, "width": 0.12, "height": 0.3 }
         }
       ]
     }
   ]
 }
 ```
+
+`box` is the bounding box drawn at that timestamp, or `null`. Its values are fractions of the frame's width and
+height measured from the top-left corner, so pixels are `x × video width`, `y × video height` and so on.
 
 Every video in the current bucket folder is included, annotated or not. Each video also carries a `streaming_url`,
 which expires by design; use `s3_uri` as the permanent reference.

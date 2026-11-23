@@ -1,6 +1,6 @@
 "use client";
 
-import { ListVideo, Pencil, Trash2 } from "lucide-react";
+import { ListVideo, Pencil, SquareDashed, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   events: AnnotationEvent[];
+  /** Colour of each event's box, matching the box on the video. */
+  boxColors: Map<string, string>;
   schema: LabelSchema;
   timeStore: TimeStore;
   selectedId: string | null;
@@ -24,7 +26,17 @@ interface Props {
 }
 
 /** Chronological log of events for the active video. Assumes `events` is sorted by time. */
-export function EventList({ events, schema, timeStore, selectedId, flashId, onSeek, onEdit, onDelete }: Props) {
+export function EventList({
+  events,
+  boxColors,
+  schema,
+  timeStore,
+  selectedId,
+  flashId,
+  onSeek,
+  onEdit,
+  onDelete,
+}: Props) {
   const labels = Object.fromEntries(schema.fields.map((f) => [f.key, f.label]));
   const flashRef = useRef<HTMLDivElement>(null);
 
@@ -69,7 +81,8 @@ export function EventList({ events, schema, timeStore, selectedId, flashId, onSe
         const trueBoxes = Object.entries(ev.checkboxes).filter(([, v]) => v);
         const attrs = Object.entries(ev.attributes).filter(([, v]) => !isEmptyValue(v));
         // Nothing but the time (and maybe a note): the note stands on its own.
-        const bare = trueBoxes.length + attrs.length === 0 && !ev.event_name && schema.event_types.length === 0;
+        const bare =
+          trueBoxes.length + attrs.length === 0 && !ev.event_name && !ev.box && schema.event_types.length === 0;
         const selected = ev.id === selectedId;
         return (
           <div
@@ -116,6 +129,15 @@ export function EventList({ events, schema, timeStore, selectedId, flashId, onSe
                   <span className="text-muted-foreground">{labels[k] ?? k}:</span> {formatValue(v)}
                 </Badge>
               ))}
+              {ev.box && (
+                <Badge
+                  variant="outline"
+                  className="h-5 gap-1 rounded font-normal"
+                  style={{ borderColor: boxColors.get(ev.id) }}
+                >
+                  <SquareDashed className="size-3" style={{ color: boxColors.get(ev.id) }} /> Box
+                </Badge>
+              )}
               {ev.note ? (
                 bare ? (
                   <span className="truncate">{ev.note}</span>

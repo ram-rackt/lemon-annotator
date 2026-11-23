@@ -179,3 +179,16 @@ def test_session_token_can_be_cleared(client, project, tmp_path):
     assert res.json()["storage"]["has_session_token"] is False
     stored = json.loads((tmp_path / "app_data" / "projects" / project / "project.json").read_text())
     assert stored["storage"]["session_token"] == ""
+
+
+def test_wrong_aws_keys_are_not_sign_in_errors():
+    # A 401 tells the website the Lemon sign-in expired (and signs the user out); a wrong AWS key must not.
+    from botocore.exceptions import ClientError
+
+    from app.models import StorageConfig
+    from app.s3_service import translate
+
+    cfg = StorageConfig(bucket="b", region="ap-south-1")
+    for code in ("InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken"):
+        err = translate(ClientError({"Error": {"Code": code, "Message": "x"}}, "ListObjectsV2"), cfg)
+        assert err.status_code == 400 and err.code.startswith("S3_")

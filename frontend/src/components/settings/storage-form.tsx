@@ -301,7 +301,8 @@ export function StorageForm({ project }: { project: Project }) {
                   setUseSaved(false);
                   set({ access_key_id: e.target.value.trim() });
                 }}
-                autoComplete="off"
+                // A password field: "off" doesn't stop browsers filling in the saved Lemon sign-in.
+                autoComplete="new-password"
                 spellCheck={false}
                 className="pr-9 font-mono"
               />

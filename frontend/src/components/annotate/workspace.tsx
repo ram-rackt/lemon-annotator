@@ -19,6 +19,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
+import { BoxLayer, boxColors, type DraftBox, draftBoxColor } from "@/components/annotate/box-layer";
 import { ClearAnnotationsDialog } from "@/components/annotate/clear-annotations-dialog";
 import { EventList, LabelsSummary } from "@/components/annotate/event-list";
 import { QueueRail, TagRail } from "@/components/annotate/panel-rails";
@@ -75,6 +76,7 @@ import { createTimeStore } from "@/lib/time-store";
 import type {
   AnnotationEvent,
   BatchResult,
+  BoundingBox,
   LabelValue,
   Project,
   StreamUrl,
@@ -402,6 +404,11 @@ function Workspace({
   }
   const [editingId, setEditingId] = useState<string | null>(null);
   const [preEditDraft, setPreEditDraft] = useState<DraftValues | null>(null);
+  // The bounding box for the next capture (or the event being edited) and the frame it was drawn on,
+  // plus box mode (drawing on the paused frame).
+  const [draftBox, setDraftBox] = useState<DraftBox | null>(null);
+  const [preEditBox, setPreEditBox] = useState<DraftBox | null>(null);
+  const [boxMode, setBoxMode] = useState(false);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showRequired, setShowRequired] = useState(false);
@@ -426,6 +433,7 @@ function Workspace({
     setShowRequiredLabels(false);
     setEditingId(null);
     setPreEditDraft(null);
+    setPreEditBox(null);
   }
   // Before any save can run (layout effects run ahead of timers and user input).
   useLayoutEffect(() => {
@@ -478,6 +486,9 @@ function Workspace({
     setShowRequiredLabels(false);
     setEditingId(null);
     setPreEditDraft(null);
+    setDraftBox(null);
+    setPreEditBox(null);
+    setBoxMode(false);
     setMediaError(null);
     setDirty(false);
     setShowRequired(false);
@@ -595,6 +606,9 @@ function Workspace({
       setShowRequired(false);
       setDraft(preEditDraft ?? emptyDraft(schema));
       setPreEditDraft(null);
+      setDraftBox(preEditBox);
+      setPreEditBox(null);
+      setBoxMode(false);
     }
     setEvents(sortEvents(data?.events ?? []));
     setLabels(withLabelDefaults(schema, data?.labels));
@@ -671,10 +685,16 @@ function Workspace({
       return;
     }
     // Per-timestamp selections only count once captured. Don't let them vanish silently.
-    if (!editingId && events.length === 0 && draftHasValues(draft, schema)) {
+    if (!editingId && events.length === 0 && (draftHasValues(draft, schema) || draftBox)) {
       toast.error("These timestamp values haven't been captured yet", {
         description: "Press Enter (Capture) to record them at the current time, or discard them.",
-        action: { label: "Discard", onClick: () => setDraft(emptyDraft(schema)) },
+        action: {
+          label: "Discard",
+          onClick: () => {
+            setDraft(emptyDraft(schema));
+            setDraftBox(null);
+          },
+        },
       });
       return;
     }
@@ -846,24 +866,38 @@ function Workspace({
     return false;
   };
 
-  const capture = () => {
+  /** Record the draft as an event at the playhead (or at its box's frame). False when it couldn't. */
+  const capture = (): boolean => {
     if (!ready || !urlQ.data || mediaError) {
       toast.error("Load a video before capturing timestamps.");
-      return;
+      return false;
     }
-    if (!requiredFilled()) return;
+    if (!requiredFilled()) return false;
     const player = playerRef.current;
-    if (!player) return;
+    if (!player) return false;
     if (prefs.pauseOnCapture) player.pause();
-    const t = player.getTime();
-    const ev: AnnotationEvent = { id: newId(), timestamp: round3(t), frame: frameAt(t, fps), ...fullValues(draft) };
+    // A box belongs to the frame it was drawn on, even if the playhead has moved since.
+    const t = draftBox ? draftBox.time : player.getTime();
+    const ev: AnnotationEvent = {
+      id: newId(),
+      timestamp: round3(t),
+      frame: frameAt(t, fps),
+      ...fullValues(draft),
+      box: draftBox?.box ?? null,
+    };
     mutateEvents((prev) => [...prev, ev]);
     setFlashId(ev.id);
     setDraft(prefs.keepValues ? { ...draft, note: "" } : emptyDraft(schema));
+    setDraftBox(null);
+    setBoxMode(false);
+    return true;
   };
 
   const startEdit = (ev: AnnotationEvent) => {
-    if (!editingId) setPreEditDraft(draft);
+    if (!editingId) {
+      setPreEditDraft(draft);
+      setPreEditBox(draftBox);
+    }
     setEditingId(ev.id);
     setDraft({
       event_name: ev.event_name,
@@ -871,6 +905,9 @@ function Workspace({
       attributes: { ...ev.attributes },
       note: ev.note,
     });
+    setDraftBox(ev.box ? { box: ev.box, time: ev.timestamp } : null);
+    // A box event opens ready to move or resize its box (Esc stops, Enter updates).
+    setBoxMode(Boolean(ev.box));
     playerRef.current?.pause();
     playerRef.current?.seek(ev.timestamp);
   };
@@ -880,12 +917,56 @@ function Workspace({
     setShowRequired(false);
     setDraft(preEditDraft ?? emptyDraft(schema));
     setPreEditDraft(null);
+    setDraftBox(preEditBox);
+    setPreEditBox(null);
+    setBoxMode(false);
+  };
+
+  /** Box mode on the paused frame, or back off. A box already drawn (or the edited event) brings the
+   * playhead back to its own frame; remove the box first to draw one somewhere else. */
+  const toggleBoxMode = () => {
+    if (boxMode) return setBoxMode(false);
+    const player = playerRef.current;
+    if (!ready || !urlQ.data || mediaError || !player) {
+      toast.error("Load a video before drawing a box.");
+      return;
+    }
+    player.pause();
+    const anchor = draftBox?.time ?? editing?.event.timestamp;
+    if (anchor !== undefined) player.seek(anchor);
+    setBoxMode(true);
+  };
+
+  /** The box button (B): with a box drawn, save it as an event (like Enter) and start another box on the
+   * same frame; otherwise draw one. While editing it adjusts that event's box. */
+  const addBox = () => {
+    if (editing || !draftBox) return toggleBoxMode();
+    const { time } = draftBox;
+    if (!capture()) return;
+    playerRef.current?.pause();
+    playerRef.current?.seek(time);
+    setBoxMode(true);
+  };
+  const boxButtonLabel = editing
+    ? boxMode
+      ? "Stop adjusting the box"
+      : "Adjust this event's box"
+    : draftBox
+      ? "Save this box and draw another"
+      : boxMode
+        ? "Stop drawing boxes"
+        : "Draw a bounding box";
+
+  const drawBox = (box: BoundingBox) => {
+    const time = editing ? editing.event.timestamp : round3(playerRef.current?.getTime() ?? 0);
+    setDraftBox({ box, time });
   };
 
   const updateEvent = () => {
     if (!editingId || !requiredFilled()) return;
     const id = editingId;
     const values = fullValues(draft);
+    const box = draftBox?.box ?? null;
     // Merge over the stored event so values for fields no longer in the schema are kept.
     mutateEvents((prev) =>
       prev.map((e) =>
@@ -894,6 +975,7 @@ function Workspace({
               ...e,
               event_name: values.event_name,
               note: values.note,
+              box,
               checkboxes: { ...e.checkboxes, ...values.checkboxes },
               attributes: { ...e.attributes, ...values.attributes },
             }
@@ -1161,7 +1243,8 @@ function Workspace({
       if (mod && e.key.toLowerCase() === "s") return void saveOnly();
       if (mod && e.key === "Enter") return void saveAndNext();
       if (e.key === "Escape") {
-        if (editingId) exitEdit();
+        if (boxMode) setBoxMode(false);
+        else if (editingId) exitEdit();
         (document.activeElement as HTMLElement | null)?.blur?.();
         return;
       }
@@ -1194,7 +1277,7 @@ function Workspace({
         case "Enter":
         case "m":
         case "M":
-          return editingId ? updateEvent() : capture();
+          return void (editingId ? updateEvent() : capture());
         case "Delete":
         case "Backspace":
           if (!editing) return false;
@@ -1207,6 +1290,9 @@ function Workspace({
         case "t":
         case "T":
           return togglePanel();
+        case "b":
+        case "B":
+          return addBox();
       }
 
       const digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code);
@@ -1415,7 +1501,30 @@ function Workspace({
             selectedEventId={editingId}
             onMarkerClick={startEdit}
             onMediaError={onMediaError}
+            onPlay={() => setBoxMode(false)}
             overlay={playerOverlay}
+            boxMode={boxMode}
+            onToggleBoxMode={addBox}
+            boxLabel={boxButtonLabel}
+            frameLayer={
+              ready && (
+                <BoxLayer
+                  timeStore={timeStore}
+                  fps={fps}
+                  drawing={boxMode}
+                  draft={draftBox}
+                  onDraw={drawBox}
+                  events={events}
+                  editingId={editingId}
+                  onSelect={startEdit}
+                  onAddBox={() => {
+                    // Save the box being drawn and start the next; otherwise just start drawing.
+                    if (draftBox) addBox();
+                    else if (!boxMode) toggleBoxMode();
+                  }}
+                />
+              )
+            }
           />
         </div>
 
@@ -1440,6 +1549,7 @@ function Workspace({
               <LabelsSummary schema={schema} labels={labels} />
               <EventList
                 events={events}
+                boxColors={boxColors(events, fps)}
                 schema={schema}
                 timeStore={timeStore}
                 selectedId={editingId}
@@ -1461,6 +1571,19 @@ function Workspace({
             timeStore={timeStore}
             draft={draft}
             onDraftChange={setDraft}
+            box={draftBox}
+            boxColor={draftBox ? draftBoxColor(events, draftBox.time, editingId, fps) : undefined}
+            boxMode={boxMode}
+            onToggleBoxMode={toggleBoxMode}
+            onAddBox={addBox}
+            onRemoveBox={() => {
+              setDraftBox(null);
+              setBoxMode(false);
+            }}
+            onGoToBox={(time) => {
+              playerRef.current?.pause();
+              playerRef.current?.seek(time);
+            }}
             labels={labels}
             onLabelsChange={changeLabels}
             showRequiredLabelErrors={showRequiredLabels}

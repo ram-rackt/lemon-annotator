@@ -159,8 +159,15 @@ export function Guide() {
                   At each moment that matters, press <Kbd>Enter</Kbd> to capture the timestamp, then choose its event
                   type and attributes in the panel.
                 </Item>
-                <Item n={3}>Fill in the whole-video answers once for the video.</Item>
-                <Item n={4}>
+                <Item n={3}>
+                  To mark where something is in the frame, press <Kbd>B</Kbd> (or the box button under the video): the
+                  video pauses and you drag a box on it. Move it or drag its corners to adjust, then press{" "}
+                  <Kbd>Enter</Kbd>. The box is saved with that timestamp, its labels and note. To mark several things on
+                  the same frame, press <Kbd>B</Kbd> again: the box is saved and a new one, in another colour, starts on
+                  that frame. Edit or delete any of them from the timeline.
+                </Item>
+                <Item n={4}>Fill in the whole-video answers once for the video.</Item>
+                <Item n={5}>
                   Press{" "}
                   <KbdGroup>
                     <Kbd>Ctrl</Kbd>
@@ -183,7 +190,7 @@ export function Guide() {
               <p>
                 When you&apos;re ready, click <strong>Export Project JSON</strong> at the top of the project. The file
                 lists every video in the folder with its S3 address, its whole-video answers and each captured moment
-                with its time, frame and attributes.
+                with its time, frame, attributes, note and box.
               </p>
             </Step>
 
@@ -220,6 +227,7 @@ const SHORTCUTS: [string[], string][] = [
   [["Space"], "Play / pause"],
   [["←", "→"], "Previous / next frame"],
   [["Enter"], "Capture timestamp"],
+  [["B"], "Draw a bounding box"],
   [["1–9"], "Toggle checkbox or option"],
   [["Ctrl", "S"], "Save"],
   [["Ctrl", "Enter"], "Save & Next"],

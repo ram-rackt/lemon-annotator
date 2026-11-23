@@ -161,13 +161,13 @@ def translate(exc: Exception, cfg: StorageConfig) -> S3Error:
 
         if code in {"InvalidAccessKeyId"}:
             return S3Error("The AWS Access Key ID is not recognized.", code="S3_INVALID_ACCESS_KEY",
-                           status_code=401, hint="Double-check the Access Key ID, or create a new key in IAM.")
+                           status_code=400, hint="Double-check the Access Key ID, or create a new key in IAM.")
         if code in {"SignatureDoesNotMatch"}:
             return S3Error("The AWS Secret Access Key is incorrect.", code="S3_INVALID_SECRET",
-                           status_code=401, hint="Re-enter the Secret Access Key (watch for spaces).")
+                           status_code=400, hint="Re-enter the Secret Access Key (watch for spaces).")
         if code in {"ExpiredToken", "TokenRefreshRequired", "InvalidToken", "ExpiredTokenException"}:
             return S3Error("The AWS session token has expired or is invalid.", code="S3_TOKEN_EXPIRED",
-                           status_code=401, hint="Refresh your temporary credentials.")
+                           status_code=400, hint="Refresh your temporary credentials.")
         if code in {"RequestTimeTooSkewed"}:
             return S3Error("Your computer clock is out of sync with AWS.", code="S3_CLOCK_SKEW",
                            status_code=400, hint="Enable automatic time sync in your OS settings.")

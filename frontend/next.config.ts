@@ -14,6 +14,10 @@ const nextConfig: NextConfig = {
     // Listing very large buckets can take a while.
     proxyTimeout: 120_000,
   },
+  async redirects() {
+    // The project list is the home page; only single projects live under /projects/<id>.
+    return [{ source: "/projects", destination: "/", permanent: false }];
+  },
   async rewrites() {
     return apiIsRemote ? [] : [{ source: "/api/:path*", destination: `${backendUrl}/api/:path*` }];
   },

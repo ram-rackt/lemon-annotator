@@ -178,6 +178,14 @@ export interface StreamUrl {
   expires_at: string;
 }
 
+/** A rectangle on the frame, in fractions of its width and height (0–1, from the top-left corner). */
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface AnnotationEvent {
   id: string;
   timestamp: number;
@@ -187,6 +195,7 @@ export interface AnnotationEvent {
   checkboxes: Record<string, boolean>;
   attributes: Record<string, AttributeValue>;
   note: string;
+  box?: BoundingBox | null;
   created_at?: string | null;
   updated_at?: string | null;
 }

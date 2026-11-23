@@ -326,6 +326,25 @@ class ProjectUpdate(BaseModel):
 VideoStatus = Literal["not_started", "in_progress", "completed"]
 
 
+class BoundingBox(BaseModel):
+    """A rectangle drawn on the frame at an event's timestamp, in fractions of the frame's width and
+    height (0–1, measured from the top-left corner), so it doesn't depend on the video's resolution."""
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+    @model_validator(mode="after")
+    def _inside_frame(self) -> "BoundingBox":
+        # Rounding in the browser can push the far edge a hair past the frame: trim it back.
+        self.width = min(self.width, 1 - self.x)
+        self.height = min(self.height, 1 - self.y)
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("The box must lie inside the frame")
+        return self
+
+
 class AnnotationEvent(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -338,6 +357,7 @@ class AnnotationEvent(BaseModel):
     # Dropdown / single choice / text -> str | None; multiple choice -> list of selected options.
     attributes: dict[str, str | list[str] | None] = Field(default_factory=dict)
     note: str = Field("", max_length=2000)
+    box: BoundingBox | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

@@ -1,7 +1,8 @@
 "use client";
 
-import { Crosshair, PanelRightClose, Pencil, Save, SkipForward, Trash2, X } from "lucide-react";
+import { Crosshair, SquareDashed, PanelRightClose, Pencil, Save, SkipForward, Trash2, X } from "lucide-react";
 
+import { type DraftBox, onFrame } from "@/components/annotate/box-layer";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -47,6 +48,15 @@ interface Props {
   /** Per-timestamp values, recorded on Capture. */
   draft: DraftValues;
   onDraftChange: (draft: DraftValues) => void;
+  /** Bounding box recorded with the capture (or the edited event), and box mode. */
+  box: DraftBox | null;
+  boxColor?: string;
+  boxMode: boolean;
+  onToggleBoxMode: () => void;
+  /** Save the drawn box as an event and start another on the same frame. */
+  onAddBox: () => void;
+  onRemoveBox: () => void;
+  onGoToBox: (time: number) => void;
   editing: { event: AnnotationEvent; index: number } | null;
   prefs: PanelPrefs;
   onPrefsChange: (prefs: PanelPrefs) => void;
@@ -193,6 +203,18 @@ export function TaggingPanel(props: Props) {
               missing={missing.has(f.key)}
             />
           ))}
+
+          <BoxField
+            box={props.box}
+            color={props.boxColor}
+            boxMode={props.boxMode}
+            timeStore={props.timeStore}
+            fps={props.fps}
+            onToggle={props.onToggleBoxMode}
+            onAddAnother={editing ? undefined : props.onAddBox}
+            onRemove={props.onRemoveBox}
+            onGoTo={props.onGoToBox}
+          />
 
           <div className="space-y-2">
             <Label htmlFor="note">
@@ -396,6 +418,81 @@ function FieldInput({
           value={text ?? ""}
           onChange={(e) => onChange(e.target.value || null)}
         />
+      )}
+    </div>
+  );
+}
+
+function BoxField({
+  box,
+  color,
+  boxMode,
+  timeStore,
+  fps,
+  onToggle,
+  onAddAnother,
+  onRemove,
+  onGoTo,
+}: {
+  box: DraftBox | null;
+  color?: string;
+  boxMode: boolean;
+  timeStore: TimeStore;
+  fps: number;
+  onToggle: () => void;
+  onAddAnother?: () => void;
+  onRemove: () => void;
+  onGoTo: (time: number) => void;
+}) {
+  const t = useCurrentTime(timeStore);
+  const away = box !== null && !onFrame(t, box.time, fps);
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+
+  return (
+    <div className="space-y-2">
+      <Label className="flex items-center justify-between">
+        <span>
+          Bounding box <span className="font-normal text-muted-foreground">(optional)</span>
+        </span>
+        <Kbd>B</Kbd>
+      </Label>
+      {box ? (
+        <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+          <div className="flex items-center gap-2">
+            <SquareDashed className="size-4 shrink-0" style={{ color }} />
+            <span className="min-w-0 flex-1 truncate">
+              {pct(box.box.width)} × {pct(box.box.height)} of the frame
+            </span>
+            <Button variant="ghost" size="xs" onClick={onToggle}>
+              {boxMode ? "Done" : "Adjust"}
+            </Button>
+            {onAddAnother && (
+              <Button variant="ghost" size="xs" onClick={onAddAnother} title="Save this box and draw another (B)">
+                + Another
+              </Button>
+            )}
+            <Button variant="ghost" size="icon-xs" onClick={onRemove} aria-label="Remove box">
+              <X />
+            </Button>
+          </div>
+          {away && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Drawn at {formatTime(box.time)}; it&apos;s captured at that time.{" "}
+              <button type="button" className="underline underline-offset-2" onClick={() => onGoTo(box.time)}>
+                Go to frame
+              </button>
+            </p>
+          )}
+        </div>
+      ) : (
+        <Button
+          variant={boxMode ? "secondary" : "outline"}
+          size="sm"
+          className="w-full justify-start"
+          onClick={onToggle}
+        >
+          <SquareDashed /> {boxMode ? "Drag on the video to draw… (Esc to stop)" : "Draw a box on this frame"}
+        </Button>
       )}
     </div>
   );

@@ -132,6 +132,29 @@ def test_export(client, project):
     assert json.loads(Path(res["path"]).read_text(encoding="utf-8")) == data
 
 
+def test_bounding_boxes_are_saved_and_exported(client, project):
+    key = "clips/rally_001.mp4"
+    event = {"id": "a", "timestamp": 1.5, "event_name": "Smash", "checkboxes": {}, "attributes": {}, "note": "here"}
+    boxed = {**event, "box": {"x": 0.25, "y": 0.5, "width": 0.8, "height": 0.25}}
+    res = client.put(f"/api/projects/{project}/annotations", params={"key": key},
+                     json={"status": "in_progress", "events": [boxed, {**event, "id": "b"}]})
+    assert res.status_code == 200
+    saved = {e["id"]: e for e in res.json()["events"]}
+    # The far edge is trimmed back to the frame; an event without a box keeps none.
+    assert saved["a"]["box"] == {"x": 0.25, "y": 0.5, "width": 0.75, "height": 0.25}
+    assert saved["b"]["box"] is None
+
+    outside = {**event, "box": {"x": 1, "y": 0, "width": 0.1, "height": 0.1}}
+    res = client.put(f"/api/projects/{project}/annotations", params={"key": key},
+                     json={"status": "in_progress", "events": [outside]})
+    assert res.status_code == 422
+
+    video = next(v for v in client.post(f"/api/projects/{project}/export").json()["data"]["videos"]
+                 if v["s3_key"] == key)
+    assert {e["id"]: e["box"] for e in video["events"]} == {
+        "a": {"x": 0.25, "y": 0.5, "width": 0.75, "height": 0.25}, "b": None}
+
+
 def test_index_rebuilds_when_deleted(client, project, tmp_path):
     client.put(f"/api/projects/{project}/annotations", params={"key": "clips/rally_001.mp4"},
                json={"status": "completed", "events": []})

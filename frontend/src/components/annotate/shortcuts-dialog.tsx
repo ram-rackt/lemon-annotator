@@ -24,6 +24,7 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
     items: [
       [["Enter"], "Capture timestamp / update event"],
       [["M"], "Capture timestamp"],
+      [["B"], "Draw a box (again: save it, draw another)"],
       [["1–9"], "Toggle checkbox"],
       [["⇧", "1–9"], "Set event type"],
       [["⇧", "0"], "Clear event type"],

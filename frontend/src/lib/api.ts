@@ -103,9 +103,11 @@ async function request<T>(path: string, init?: RequestInit, retried = false): Pr
     body as { error?: { code?: string; message?: string; hint?: string; details?: Record<string, unknown> } }
   )?.error;
   if (err?.message) {
-    // Retry once with a refreshed token before giving up on the session (unsaved edits are then kept).
-    if (res.status === 401 && !retried && (await refreshSignIn())) return request<T>(path, init, true);
-    if (res.status === 401 || err.code === "AUTH_FORBIDDEN") endSession(err.message);
+    // Only a sign-in error (AUTH_*) ends the session; anything else, such as a wrong AWS key, is shown
+    // where it happened. Retry once with a refreshed token first (unsaved edits are then kept).
+    const signInError = res.status === 401 && Boolean(err.code?.startsWith("AUTH_"));
+    if (signInError && !retried && (await refreshSignIn())) return request<T>(path, init, true);
+    if (signInError || err.code === "AUTH_FORBIDDEN") endSession(err.message);
     throw new ApiError(err.message, res.status, err.code, err.hint ?? null, err.details ?? {});
   }
   if (res.status === 500 || res.status === 502 || res.status === 503 || res.status === 504) {

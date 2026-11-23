@@ -47,12 +47,19 @@ export function draftBoxColor(events: AnnotationEvent[], time: number, editingId
 }
 
 type Corner = "nw" | "ne" | "sw" | "se";
+type Edge = "n" | "e" | "s" | "w";
+/** What a resize drag holds: a corner (both directions) or an edge (one direction). */
+type Handle = Corner | Edge;
 type Point = { x: number; y: number };
-type Drag = { kind: "new"; start: Point } | { kind: "move"; start: Point } | { kind: "resize"; fixed: Point };
+type Drag =
+  | { kind: "new"; start: Point; pick?: string }
+  | { kind: "move"; start: Point }
+  | { kind: "resize"; handle: Handle; origin: BoundingBox };
 
 // Smaller than this (a fraction of the frame) is a stray click, not a box.
 const MIN_SIZE = 0.005;
 const CORNERS: Corner[] = ["nw", "ne", "sw", "se"];
+const EDGES: Edge[] = ["n", "e", "s", "w"];
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 const boxFrom = (a: Point, b: Point): BoundingBox => ({
@@ -62,29 +69,49 @@ const boxFrom = (a: Point, b: Point): BoundingBox => ({
   height: Math.abs(a.y - b.y),
 });
 
-/** The corner opposite `corner`, which stays put while `corner` is dragged. */
-const oppositeOf = (b: BoundingBox, corner: Corner): Point => ({
-  x: corner.includes("w") ? b.x + b.width : b.x,
-  y: corner.includes("n") ? b.y + b.height : b.y,
-});
+/** `b` with the sides named by `handle` moved to `p`: a corner moves two sides, an edge only one. */
+function resized(b: BoundingBox, handle: Handle, p: Point): BoundingBox {
+  const a = { x: b.x, y: b.y };
+  const z = { x: b.x + b.width, y: b.y + b.height };
+  if (handle.includes("w")) a.x = p.x;
+  if (handle.includes("e")) z.x = p.x;
+  if (handle.includes("n")) a.y = p.y;
+  if (handle.includes("s")) z.y = p.y;
+  return boxFrom(a, z);
+}
 
 interface Props {
   timeStore: TimeStore;
   fps: number;
-  /** Box mode: drag to draw, drag the box to move it, drag a corner to resize it. */
+  /** Box mode: drag to draw, drag the box to move it, drag a corner or side to resize it. */
   drawing: boolean;
   draft: DraftBox | null;
-  onDraw: (box: BoundingBox) => void;
+  /** The draft box changed: `fresh` when a new box was dragged out, otherwise it was moved or resized. */
+  onDraw: (box: BoundingBox, fresh: boolean) => void;
   /** All events (boxes show on their own frame); the one being edited is shown as the draft. */
   events: AnnotationEvent[];
   editingId: string | null;
+  /** A saved box was clicked: edit its event. */
   onSelect: (ev: AnnotationEvent) => void;
+  /** A click (not a drag) on the picture away from every box. */
+  onBackground: () => void;
   /** "+ Add box": save the box being drawn (if any) and start another on this frame. */
   onAddBox: () => void;
 }
 
 /** Boxes over the video picture. Positioned by the player exactly over the frame (not the letterbox). */
-export function BoxLayer({ timeStore, fps, drawing, draft, onDraw, events, editingId, onSelect, onAddBox }: Props) {
+export function BoxLayer({
+  timeStore,
+  fps,
+  drawing,
+  draft,
+  onDraw,
+  events,
+  editingId,
+  onSelect,
+  onBackground,
+  onAddBox,
+}: Props) {
   const t = useCurrentTime(timeStore);
   const ref = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
@@ -97,23 +124,42 @@ export function BoxLayer({ timeStore, fps, drawing, draft, onDraw, events, editi
   const saved = events
     .map((event, index) => ({ event, index }))
     .filter(({ event }) => event.box && event.id !== editingId && onFrame(t, event.timestamp, fps));
+  const editingIndex = editingId ? events.findIndex((e) => e.id === editingId) : -1;
 
   const pointAt = (e: React.PointerEvent): Point => {
     const r = ref.current!.getBoundingClientRect();
     return { x: clamp((e.clientX - r.left) / r.width, 0, 1), y: clamp((e.clientY - r.top) / r.height, 0, 1) };
   };
 
+  const select = (id: string | undefined) => {
+    const event = id ? saved.find((s) => s.event.id === id)?.event : undefined;
+    if (event) onSelect(event);
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
-    if (!drawing || e.button !== 0) return;
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    // A saved box under the pointer (the topmost one when boxes overlap).
+    const pick = target.closest<HTMLElement>("[data-pick]")?.dataset.pick;
+    if (!drawing) {
+      // Outside box mode only the saved boxes take clicks (the rest of the picture plays / pauses).
+      if (pick) {
+        e.preventDefault();
+        select(pick);
+      }
+      return;
+    }
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = pointAt(e);
-    const target = (e.target as HTMLElement).dataset;
-    if (draftHere && target.corner)
-      drag.current = { kind: "resize", fixed: oppositeOf(draftHere, target.corner as Corner) };
-    else if (draftHere && target.box) drag.current = { kind: "move", start: p };
-    else drag.current = { kind: "new", start: p };
-    if (drag.current.kind === "new") setLive(boxFrom(p, p));
+    const handle = target.closest<HTMLElement>("[data-handle]")?.dataset.handle as Handle | undefined;
+    if (draftHere && handle) drag.current = { kind: "resize", handle, origin: draftHere };
+    else if (draftHere && target.closest("[data-box]")) drag.current = { kind: "move", start: p };
+    else {
+      // A click selects the saved box under it; a drag (even starting on one) draws a new box.
+      drag.current = { kind: "new", start: p, pick };
+      setLive(boxFrom(p, p));
+    }
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
@@ -121,7 +167,7 @@ export function BoxLayer({ timeStore, fps, drawing, draft, onDraw, events, editi
     if (!d) return;
     const p = pointAt(e);
     if (d.kind === "new") setLive(boxFrom(d.start, p));
-    else if (d.kind === "resize") setLive(boxFrom(d.fixed, p));
+    else if (d.kind === "resize") setLive(resized(d.origin, d.handle, p));
     else if (draftHere) {
       setLive({
         ...draftHere,
@@ -132,9 +178,15 @@ export function BoxLayer({ timeStore, fps, drawing, draft, onDraw, events, editi
   };
 
   const onPointerUp = () => {
-    if (live && live.width >= MIN_SIZE && live.height >= MIN_SIZE) onDraw(live);
+    const d = drag.current;
     drag.current = null;
     setLive(null);
+    if (!d) return;
+    if (live && live.width >= MIN_SIZE && live.height >= MIN_SIZE) onDraw(live, d.kind === "new");
+    else if (d.kind === "new") {
+      if (d.pick) select(d.pick);
+      else onBackground();
+    }
   };
 
   return (
@@ -151,22 +203,21 @@ export function BoxLayer({ timeStore, fps, drawing, draft, onDraw, events, editi
         return (
           <div
             key={event.id}
-            className={cn("absolute border-2", drawing && "opacity-60")}
+            data-pick={event.id}
+            title="Click to edit this box"
+            className={cn(
+              "pointer-events-auto absolute cursor-pointer border-2 transition-colors hover:bg-white/15",
+              drawing && "opacity-70 hover:opacity-100",
+            )}
             style={{ ...place(event.box!), borderColor: color }}
           >
-            <button
-              type="button"
-              onClick={() => onSelect(event)}
-              className={cn(
-                "absolute -top-px left-0 max-w-48 -translate-y-full truncate rounded-t px-1.5 py-0.5 text-[11px] font-medium text-black",
-                drawing ? "pointer-events-none" : "pointer-events-auto",
-              )}
+            <span
+              className="absolute -top-px left-0 max-w-48 -translate-y-full truncate rounded-t px-1.5 py-0.5 text-[11px] font-medium text-black"
               style={{ backgroundColor: color }}
-              title="Edit this event"
             >
               #{index + 1}
               {event.event_name ? ` ${event.event_name}` : ""}
-            </button>
+            </span>
           </div>
         );
       })}
@@ -178,13 +229,46 @@ export function BoxLayer({ timeStore, fps, drawing, draft, onDraw, events, editi
           // The fill is the border colour at ~10% opacity (#rrggbb + alpha).
           style={{ ...place(shown), borderColor: shownColor, backgroundColor: `${shownColor}1a` }}
         >
+          {/* The box being edited keeps its number, so it's clear which one is selected. */}
+          {editingIndex >= 0 && !live && (
+            <span
+              className="absolute -top-px left-0 -translate-y-full rounded-t px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap text-black"
+              style={{ backgroundColor: shownColor }}
+            >
+              #{editingIndex + 1} · editing
+            </span>
+          )}
+          {/* Each side is a grab strip along the border (one direction), with a grip in its middle. */}
+          {drawing &&
+            EDGES.map((edge) => {
+              const across = edge === "n" || edge === "s";
+              return (
+                <span
+                  key={edge}
+                  data-handle={edge}
+                  className={cn(
+                    "absolute",
+                    across ? "inset-x-1.5 h-3 cursor-ns-resize" : "inset-y-1.5 w-3 cursor-ew-resize",
+                    { n: "-top-1.5", s: "-bottom-1.5", e: "-right-1.5", w: "-left-1.5" }[edge],
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-1/2 left-1/2 -translate-1/2 rounded-[2px] border border-black/60",
+                      across ? "h-1.5 w-4" : "h-4 w-1.5",
+                    )}
+                    style={{ backgroundColor: shownColor }}
+                  />
+                </span>
+              );
+            })}
           {drawing &&
             CORNERS.map((c) => (
               <span
                 key={c}
-                data-corner={c}
+                data-handle={c}
                 className={cn(
-                  "absolute size-2.5 rounded-[2px] border border-black/60",
+                  "absolute z-10 size-2.5 rounded-[2px] border border-black/60",
                   c.includes("n") ? "-top-1.5" : "-bottom-1.5",
                   c.includes("w") ? "-left-1.5" : "-right-1.5",
                   c === "nw" || c === "se" ? "cursor-nwse-resize" : "cursor-nesw-resize",
@@ -197,12 +281,12 @@ export function BoxLayer({ timeStore, fps, drawing, draft, onDraw, events, editi
 
       {drawing && !shown && (
         <p className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1 text-xs whitespace-nowrap text-white">
-          {saved.length ? "Drag to draw another box" : "Drag to draw a box"} · Esc to stop
+          {saved.length ? "Drag to draw another box · click a box to edit it" : "Drag to draw a box"} · Esc to stop
         </p>
       )}
 
-      {/* On a frame that already has a box: add the next one (not while editing one). */}
-      {!editingId && (saved.length > 0 || (drawing && draftHere)) && (
+      {/* On a frame that already has a box: add the next one. */}
+      {(saved.length > 0 || draftHere) && (
         <button
           type="button"
           onPointerDown={(e) => e.stopPropagation()} // not the start of a new box

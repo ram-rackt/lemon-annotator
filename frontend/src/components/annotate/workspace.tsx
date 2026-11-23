@@ -281,6 +281,17 @@ interface SavedBase {
   savedAt: string | null;
 }
 
+/** One step of undo history: what the video's annotation looked like, and which event was being edited
+ * (the box being drawn belongs to that edit, or to the next capture when none). */
+interface HistoryEntry {
+  events: AnnotationEvent[];
+  labels: Record<string, LabelValue>;
+  draftBox: DraftBox | null;
+  editingId: string | null;
+}
+
+const HISTORY_LIMIT = 100;
+
 const baseOf = (key: string, data: VideoAnnotation | null | undefined): SavedBase => ({
   key,
   revision: data?.revision ?? null,
@@ -451,13 +462,42 @@ function Workspace({
     setContentVersion(versionRef.current);
   };
 
+  /* ---------------------------- undo / redo ----------------------------- */
+
+  // Ctrl+Z / Ctrl+Y over this video's events, whole-video answers and the box being drawn. The latest
+  // state is read from a ref so a change made from an older closure (e.g. a toast's Undo) records it right.
+  const latest = useRef<HistoryEntry>({ events, labels, draftBox, editingId });
+  useLayoutEffect(() => {
+    latest.current = { events, labels, draftBox, editingId };
+  });
+  const undoStack = useRef<HistoryEntry[]>([]);
+  const redoStack = useRef<HistoryEntry[]>([]);
+  const lastChange = useRef<{ kind: string; at: number } | null>(null);
+
+  /** Remember the state before a change. Answers typed in quick succession count as one change. */
+  const remember = (kind: "events" | "labels" | "box") => {
+    const now = Date.now();
+    const last = lastChange.current;
+    lastChange.current = { kind, at: now };
+    if (kind === "labels" && last?.kind === kind && now - last.at < 1000) return;
+    undoStack.current = [...undoStack.current.slice(1 - HISTORY_LIMIT), latest.current];
+    redoStack.current = [];
+  };
+  const forgetHistory = () => {
+    undoStack.current = [];
+    redoStack.current = [];
+    lastChange.current = null;
+  };
+
   const mutateEvents = (fn: (prev: AnnotationEvent[]) => AnnotationEvent[]) => {
+    remember("events");
     setEvents((prev) => sortEvents(fn(prev)));
     setDirty(true);
     bumpVersion();
   };
 
   const changeLabels = (next: Record<string, LabelValue>) => {
+    remember("labels");
     setLabels(next);
     setDirty(true);
     bumpVersion();
@@ -489,6 +529,7 @@ function Workspace({
     setDraftBox(null);
     setPreEditBox(null);
     setBoxMode(false);
+    forgetHistory();
     setMediaError(null);
     setDirty(false);
     setShowRequired(false);
@@ -613,6 +654,8 @@ function Workspace({
     setEvents(sortEvents(data?.events ?? []));
     setLabels(withLabelDefaults(schema, data?.labels));
     setDirty(false);
+    // Undoing back into the replaced content would bring it back over the saved copy.
+    forgetHistory();
     baseRef.current = baseOf(key, data);
     // Nothing left to save: an autosave queued for the replaced content must not write it back.
     bumpVersion();
@@ -893,8 +936,17 @@ function Workspace({
     return true;
   };
 
+  /** Select an event to edit (timeline row, marker or its box). Switching from another event keeps the
+   * changes made to that one, like selecting another shape in a drawing tool. */
   const startEdit = (ev: AnnotationEvent) => {
-    if (!editingId) {
+    if (editingId === ev.id) {
+      playerRef.current?.pause();
+      playerRef.current?.seek(ev.timestamp);
+      return;
+    }
+    if (editingId) {
+      if (!applyEdit()) return;
+    } else {
       setPreEditDraft(draft);
       setPreEditBox(draftBox);
     }
@@ -957,32 +1009,89 @@ function Workspace({
         ? "Stop drawing boxes"
         : "Draw a bounding box";
 
-  const drawBox = (box: BoundingBox) => {
+  const drawBox = (box: BoundingBox, fresh: boolean) => {
+    if (editing && fresh) {
+      // A new box dragged out while editing another: keep that edit, the new box is for the next capture.
+      if (!applyEdit()) return;
+      exitEdit();
+      remember("box");
+      setDraftBox({ box, time: editing.event.timestamp });
+      setBoxMode(true);
+      return;
+    }
     const time = editing ? editing.event.timestamp : round3(playerRef.current?.getTime() ?? 0);
+    remember("box");
     setDraftBox({ box, time });
   };
 
-  const updateEvent = () => {
-    if (!editingId || !requiredFilled()) return;
+  /** A click on the picture away from every box: done editing (the changes are kept). */
+  const clickBackground = () => {
+    if (editing) updateEvent();
+  };
+
+  /** "+ Add box" on the video: like the box button, and while editing it finishes that edit first. */
+  const addBoxOnFrame = () => {
+    if (editing) {
+      if (!applyEdit()) return;
+      exitEdit();
+      setBoxMode(true);
+    } else if (draftBox) addBox();
+    else if (!boxMode) toggleBoxMode();
+  };
+
+  /** Step back (undo) or forward (redo) through the history; `from` is the stack to take a step from. */
+  const stepHistory = (from: React.RefObject<HistoryEntry[]>, to: React.RefObject<HistoryEntry[]>) => {
+    const entry = from.current.pop();
+    if (!entry) return;
+    const now = latest.current;
+    to.current.push(now);
+    lastChange.current = null;
+    // Only the saved content needs saving again (a step that just moves the box being drawn doesn't).
+    if (entry.events !== now.events || entry.labels !== now.labels) {
+      setEvents(entry.events);
+      setLabels(entry.labels);
+      setDirty(true);
+      bumpVersion();
+    }
+    // The box being drawn only comes back into the edit (or capture) it was drawn for.
+    if (entry.editingId === editingId) {
+      setDraftBox(entry.draftBox);
+      if (entry.draftBox) {
+        playerRef.current?.pause();
+        playerRef.current?.seek(entry.draftBox.time);
+      }
+    }
+    if (editingId && !entry.events.some((e) => e.id === editingId)) exitEdit();
+  };
+  const undo = () => stepHistory(undoStack, redoStack);
+  const redo = () => stepHistory(redoStack, undoStack);
+
+  /** Write the edit into its event (only when something changed). False when required fields are empty. */
+  const applyEdit = (): boolean => {
+    if (!editingId || !requiredFilled()) return false;
     const id = editingId;
+    const current = events.find((e) => e.id === id);
+    if (!current) return true;
     const values = fullValues(draft);
-    const box = draftBox?.box ?? null;
     // Merge over the stored event so values for fields no longer in the schema are kept.
-    mutateEvents((prev) =>
-      prev.map((e) =>
-        e.id === id
-          ? {
-              ...e,
-              event_name: values.event_name,
-              note: values.note,
-              box,
-              checkboxes: { ...e.checkboxes, ...values.checkboxes },
-              attributes: { ...e.attributes, ...values.attributes },
-            }
-          : e,
-      ),
-    );
-    setFlashId(id);
+    const next: AnnotationEvent = {
+      ...current,
+      event_name: values.event_name,
+      note: values.note,
+      box: draftBox?.box ?? null,
+      checkboxes: { ...current.checkboxes, ...values.checkboxes },
+      attributes: { ...current.attributes, ...values.attributes },
+    };
+    if (JSON.stringify(next) !== JSON.stringify({ ...current, box: current.box ?? null })) {
+      mutateEvents((prev) => prev.map((e) => (e.id === id ? next : e)));
+      setFlashId(id);
+    }
+    return true;
+  };
+
+  const updateEvent = () => {
+    if (!editingId || !applyEdit()) return;
+    setFlashId(editingId);
     exitEdit();
   };
 
@@ -1242,6 +1351,9 @@ function Workspace({
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "s") return void saveOnly();
       if (mod && e.key === "Enter") return void saveAndNext();
+      // Ctrl+Z / Ctrl+Y (or Ctrl+Shift+Z). Inside a text box the browser's own text undo applies instead.
+      if (mod && e.key.toLowerCase() === "z") return e.shiftKey ? redo() : undo();
+      if (mod && e.key.toLowerCase() === "y") return redo();
       if (e.key === "Escape") {
         if (boxMode) setBoxMode(false);
         else if (editingId) exitEdit();
@@ -1517,11 +1629,8 @@ function Workspace({
                   events={events}
                   editingId={editingId}
                   onSelect={startEdit}
-                  onAddBox={() => {
-                    // Save the box being drawn and start the next; otherwise just start drawing.
-                    if (draftBox) addBox();
-                    else if (!boxMode) toggleBoxMode();
-                  }}
+                  onBackground={clickBackground}
+                  onAddBox={addBoxOnFrame}
                 />
               )
             }
@@ -1577,6 +1686,7 @@ function Workspace({
             onToggleBoxMode={toggleBoxMode}
             onAddBox={addBox}
             onRemoveBox={() => {
+              remember("box");
               setDraftBox(null);
               setBoxMode(false);
             }}

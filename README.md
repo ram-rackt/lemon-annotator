@@ -250,6 +250,7 @@ grouped by project; see [Workspaces and coaches](#workspaces-and-coaches).
 | `Shift` + `1`–`9` | Set event type (`Shift` + `0` clears it) |
 | `Esc` / `Delete` | Cancel editing / delete the event being edited |
 | `Ctrl` + `S` / `Ctrl` + `Enter` | Save / Save & Next |
+| `Ctrl` + `Z` / `Ctrl` + `Y` | Undo / redo changes to the video's events, answers and boxes (`Ctrl` + `Shift` + `Z` also redoes) |
 | `Alt` + `↑` / `↓` | Previous / next video |
 | `Q` / `T` | Show / hide the queue / label panel |
 | `Ctrl` + `K` | Search projects (the search box in the top bar, on any page) |

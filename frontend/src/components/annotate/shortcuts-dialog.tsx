@@ -30,6 +30,8 @@ const GROUPS: { title: string; items: [string[], string][] }[] = [
       [["⇧", "0"], "Clear event type"],
       [["Esc"], "Cancel editing"],
       [["Del"], "Delete event being edited"],
+      [["Ctrl", "Z"], "Undo"],
+      [["Ctrl", "Y"], "Redo"],
     ],
   },
   {

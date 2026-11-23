@@ -161,10 +161,10 @@ export function Guide() {
                 </Item>
                 <Item n={3}>
                   To mark where something is in the frame, press <Kbd>B</Kbd> (or the box button under the video): the
-                  video pauses and you drag a box on it. Move it or drag its corners to adjust, then press{" "}
+                  video pauses and you drag a box on it. Move it, or drag its corners or sides to adjust, then press{" "}
                   <Kbd>Enter</Kbd>. The box is saved with that timestamp, its labels and note. To mark several things on
                   the same frame, press <Kbd>B</Kbd> again: the box is saved and a new one, in another colour, starts on
-                  that frame. Edit or delete any of them from the timeline.
+                  that frame. Click any box to edit it (or pick it in the timeline), and delete it from the timeline.
                 </Item>
                 <Item n={4}>Fill in the whole-video answers once for the video.</Item>
                 <Item n={5}>
@@ -228,6 +228,7 @@ const SHORTCUTS: [string[], string][] = [
   [["←", "→"], "Previous / next frame"],
   [["Enter"], "Capture timestamp"],
   [["B"], "Draw a bounding box"],
+  [["Ctrl", "Z"], "Undo (Ctrl + Y redoes)"],
   [["1–9"], "Toggle checkbox or option"],
   [["Ctrl", "S"], "Save"],
   [["Ctrl", "Enter"], "Save & Next"],

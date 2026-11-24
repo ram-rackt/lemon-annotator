@@ -1,24 +1,28 @@
 "use client";
 
-import { BookOpen, Flag, FolderKanban } from "lucide-react";
+import { BookOpen, ChartColumn, Flag, FolderKanban } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { useReviewAll } from "@/hooks/queries";
+import { useReviewAll, useShotTypeStats } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
 import { cn } from "@/lib/utils";
 
-/** Projects | Coach review | Guide, in the header of the pages that span every project. */
+/** Projects | Coach review | Progress | Guide, in the header of the pages that span every project. */
 export function DashboardNav() {
   const pathname = usePathname();
   const hydrated = useHydrated();
   const reviewQ = useReviewAll();
+  // Progress is for the team and coaches: the server says whether this user is one of them.
+  const statsQ = useShotTypeStats();
   // Match the server HTML during hydration.
   const flagged = hydrated ? reviewQ.data?.reduce((n, p) => n + p.videos.length, 0) : undefined;
+  const showProgress = hydrated && Boolean(statsQ.data?.available);
 
   const tabs = [
     { href: "/", label: "Projects", icon: FolderKanban, count: undefined },
     { href: "/review", label: "Coach review", icon: Flag, count: flagged },
+    ...(showProgress ? [{ href: "/progress", label: "Progress", icon: ChartColumn, count: undefined }] : []),
     { href: "/guide", label: "Guide", icon: BookOpen, count: undefined },
   ];
 

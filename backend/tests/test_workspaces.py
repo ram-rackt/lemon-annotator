@@ -7,8 +7,8 @@ from app.config import parse_teams
 from app.deps import get_store
 from conftest import BUCKET, STORAGE, app_client, bearer, create_project, make_token
 
-RAM = bearer(make_token("u-ram", "ram@rackt.in", "Ram"))
-ANKANA = bearer(make_token("u-ankana", "Ankana@Rackt.in", "Ankana"))  # emails match case-insensitively
+RAM = bearer(make_token("u-ram", "ram@example.com", "Ram"))
+ANKANA = bearer(make_token("u-ankana", "Ankana@Example.com", "Ankana"))  # emails match case-insensitively
 PAT = bearer(make_token("u-pat", "pat@example.com", "Pat"))
 COACH = bearer(make_token("u-coach", "coach@example.com", "Coach"))
 
@@ -23,7 +23,7 @@ FLAGGED, OTHER = "clips/rally_001.mp4", "clips/serve_003.mov"
 @pytest.fixture(params=["files", "database"])
 def ws_client(request, tmp_path, monkeypatch):
     with app_client(tmp_path, monkeypatch, database=request.param == "database", auth=True,
-                    teams="rackt: ram@rackt.in, ankana@rackt.in", coaches="coach@example.com") as c:
+                    teams="rackt: ram@example.com, ankana@example.com", coaches="coach@example.com") as c:
         yield c
 
 
@@ -150,7 +150,7 @@ def test_coach_projects_stay_private(ws_client):
 def test_projects_from_before_workspaces_go_to_the_first_team(tmp_path, monkeypatch):
     with app_client(tmp_path, monkeypatch, database=True) as client:  # sign-in off, like the old setup
         old = create_project(client)
-    with app_client(tmp_path, monkeypatch, database=True, auth=True, teams="rackt: ram@rackt.in; b: x@y.z") as client:
+    with app_client(tmp_path, monkeypatch, database=True, auth=True, teams="rackt: ram@example.com; b: x@y.z") as client:
         # Until claimed (at startup), an unowned project is shared by everyone signed in.
         assert [p["id"] for p in client.get("/api/projects", headers=PAT).json()] == [old]
         assert claim_unowned_projects(get_store()) == 1
@@ -164,7 +164,7 @@ def test_teams_setting_is_checked():
     assert parse_teams(" Rackt : A@x.com, b@x.com ; solo: c@y.com ") == [("rackt", ["a@x.com", "b@x.com"]),
                                                                         ("solo", ["c@y.com"])]
     assert parse_teams("") == []
-    for bad in ["ram@rackt.in", "rackt:", ": a@x.com", "a: x@y.z; b: x@y.z", "a: x@y.z; a: q@y.z"]:
+    for bad in ["ram@example.com", "rackt:", ": a@x.com", "a: x@y.z; b: x@y.z", "a: x@y.z; a: q@y.z"]:
         with pytest.raises(ValueError):
             parse_teams(bad)
 

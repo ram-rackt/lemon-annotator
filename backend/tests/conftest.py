@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from moto import mock_aws
 
-from app import deps, presence, s3_service
+from app import deps, presence, s3_service, video_info
 from app.auth import _jwks_client
 from app.config import get_settings
 from app.db_store import DatabaseStore
@@ -28,6 +28,7 @@ def _reset_caches():
     deps.get_store.cache_clear()
     _jwks_client.cache_clear()
     s3_service._clients.clear()
+    video_info._cache.clear()
     presence.clear()
 
 

@@ -470,7 +470,10 @@ function TimeReadout({ timeStore, duration, fps }: { timeStore: TimeStore; durat
     <div className="ml-2 flex items-baseline gap-2 font-mono text-xs tabular-nums">
       <span className="text-white">{formatTime(t)}</span>
       <span className="text-white/40">/ {formatTime(duration)}</span>
-      <span className="hidden rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/70 sm:inline">
+      <span
+        className="hidden rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-white/70 sm:inline"
+        title={`Frame number at ${fps} fps`}
+      >
         F {frameAt(t, fps)}
       </span>
     </div>

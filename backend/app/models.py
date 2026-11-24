@@ -86,6 +86,15 @@ class LabelSchema(BaseModel):
             return next((f for f in eligible if f.key == key), None)
         return next((f for f in eligible if "review" in f"{f.key} {f.label}".lower()), None)
 
+    def shot_type_field(self) -> SchemaField | None:
+        """The whole-video choice field that names a video's shot type ("Shot Type" / shot_type, else the
+        first with "shot" in its key or label), for the home page's shot type counts. None without one."""
+        eligible = [f for f in self.fields if f.scope == "video" and f.type in ("choices", "select")]
+        named = lambda f: f"{f.key} {f.label}".lower().replace("_", " ")  # noqa: E731
+        return next((f for f in eligible if "shot type" in named(f)), None) or next(
+            (f for f in eligible if "shot" in named(f)), None
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Coach review
@@ -400,6 +409,9 @@ class AnnotationSave(BaseModel):
     streaming_url: str | None = None
     streaming_url_expires_at: datetime | None = None
     duration_seconds: float | None = Field(None, ge=0)
+    # The video's own frame rate (GET /videos/frame-rate); frames are numbered with it. Omitted: the
+    # project's FPS setting.
+    fps: float | None = Field(None, gt=0, le=240)
     # The revision these edits started from (null: "there was no saved annotation"). When sent and it no
     # longer matches, the save is refused with a 409 conflict. Omit it to skip the check.
     base_revision: str | None = None
@@ -456,6 +468,13 @@ class StreamUrl(BaseModel):
     key: str
     url: str
     expires_at: datetime
+
+
+class VideoFrameRate(BaseModel):
+    key: str
+    fps: float
+    # True: read from the video file. False: it couldn't be, so this is the project's FPS setting.
+    detected: bool
 
 
 class VideoDetails(BaseModel):
@@ -567,6 +586,36 @@ class ProjectReview(ReviewList):
 
     project_id: str
     project_name: str
+
+
+# --------------------------------------------------------------------------- #
+# Home page stats
+# --------------------------------------------------------------------------- #
+
+
+class ProjectCount(BaseModel):
+    project_id: str
+    project_name: str
+    count: int
+
+
+class ShotTypeCount(BaseModel):
+    # Answers that differ only in case, spaces or underscores ("Forehand Clear" / forehand_clear) count as one.
+    shot_type: str
+    label: str
+    count: int
+    projects: list[ProjectCount]
+
+
+class ShotTypeStats(BaseModel):
+    """Completed videos per shot type across the user's workspace, most annotated first."""
+
+    # False: not offered to this user (only team workspaces have it for now); everything else is empty.
+    available: bool
+    # Completed videos in projects with a shot type field, and how many of those have no shot type set.
+    completed: int = 0
+    without_shot_type: int = 0
+    shot_types: list[ShotTypeCount] = Field(default_factory=list)
 
 
 class ActivityPing(BaseModel):

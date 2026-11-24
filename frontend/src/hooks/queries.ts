@@ -23,6 +23,7 @@ export const keys = {
   project: (id: string) => ["projects", id] as const,
   videos: (id: string) => ["projects", id, "videos"] as const,
   streamUrl: (id: string, key: string) => ["projects", id, "stream-url", key] as const,
+  frameRate: (id: string, key: string) => ["projects", id, "frame-rate", key] as const,
   annotation: (id: string, key: string) => ["projects", id, "annotation", key] as const,
   details: (id: string, key: string) => ["projects", id, "details", key] as const,
   activity: (id: string, key: string | null) => ["projects", id, "activity", key] as const,
@@ -31,6 +32,7 @@ export const keys = {
   reviewAll: ["review"] as const,
   /** The signed-in user's saved AWS keys. */
   savedKeys: ["saved-keys"] as const,
+  shotTypeStats: ["stats", "shot-types"] as const,
 };
 
 /** A video's flag (or a project's review field) may have changed: refresh both review lists. */
@@ -41,6 +43,11 @@ export function invalidateReview(qc: QueryClient, id: string) {
 
 export function useProjects() {
   return useQuery({ queryKey: keys.projects, queryFn: api.listProjects, enabled: useSignedIn() });
+}
+
+/** Completed videos per shot type across the workspace (home page), read again each time it's shown. */
+export function useShotTypeStats() {
+  return useQuery({ queryKey: keys.shotTypeStats, queryFn: api.shotTypeStats, enabled: useSignedIn(), staleTime: 0 });
 }
 
 export function useProject(id: string) {
@@ -68,7 +75,11 @@ export function useUpdateProject(id: string) {
       qc.setQueryData(keys.project(id), project);
       qc.invalidateQueries({ queryKey: keys.projects, exact: true });
       invalidateReview(qc, id);
-      if (body.storage || body.settings) qc.invalidateQueries({ queryKey: keys.videos(id) });
+      if (body.storage || body.settings) {
+        qc.invalidateQueries({ queryKey: keys.videos(id) });
+        // Read again: another bucket, or a new FPS setting for videos whose rate can't be read.
+        qc.invalidateQueries({ queryKey: ["projects", id, "frame-rate"] });
+      }
       if (body.storage) {
         qc.invalidateQueries({ queryKey: keys.savedKeys }); // the key pair just used is remembered
         // Presigned URLs and object details were made for the old bucket / credentials.
@@ -141,6 +152,18 @@ export function streamUrlQuery(id: string, key: string) {
 export function useStreamUrl(id: string, key: string | null) {
   const signedIn = useSignedIn();
   return useQuery({ ...streamUrlQuery(id, key ?? ""), enabled: Boolean(key) && signedIn });
+}
+
+/** The video's own frame rate (read from its file once; it doesn't change). */
+export function useFrameRate(id: string, key: string | null) {
+  const signedIn = useSignedIn();
+  return useQuery({
+    queryKey: keys.frameRate(id, key ?? ""),
+    queryFn: () => api.frameRate(id, key ?? ""),
+    enabled: Boolean(key) && signedIn,
+    staleTime: Infinity,
+    retry: 1,
+  });
 }
 
 export function useAnnotation(id: string, key: string | null) {

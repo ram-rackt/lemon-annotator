@@ -14,9 +14,11 @@ import type {
   ReviewList,
   SavedKey,
   StorageUpdate,
+  ShotTypeStats,
   StreamUrl,
   VideoAnnotation,
   VideoDetails,
+  VideoFrameRate,
   VideoList,
   VideoRef,
 } from "./types";
@@ -149,6 +151,8 @@ export const api = {
   listVideos: (id: string) => request<VideoList>(`/api/projects/${id}/videos`),
   syncStorage: (id: string) => request<VideoList>(`/api/projects/${id}/sync`, { method: "POST" }),
   streamUrl: (id: string, key: string) => request<StreamUrl>(`/api/projects/${id}/videos/stream-url?${q(key)}`),
+  shotTypeStats: () => request<ShotTypeStats>("/api/stats/shot-types"),
+  frameRate: (id: string, key: string) => request<VideoFrameRate>(`/api/projects/${id}/videos/frame-rate?${q(key)}`),
   videoDetails: (id: string, key: string) => request<VideoDetails>(`/api/projects/${id}/videos/details?${q(key)}`),
   /** `revision`: the saved version the user saw (null: nothing saved; undefined: unknown, no check). */
   /** Clear the annotations of these videos. Ones saved by someone else since `revision` are skipped. */

@@ -85,7 +85,11 @@ export function GeneralSettings({ project }: { project: Project }) {
         <Field label="Project name" htmlFor="name">
           <Input id="name" value={form.name} maxLength={100} onChange={(e) => set({ name: e.target.value })} />
         </Field>
-        <Field label="Frame rate (FPS)" htmlFor="fps" hint="Used for frame stepping and frame numbers in the export.">
+        <Field
+          label="Fallback frame rate (FPS)"
+          htmlFor="fps"
+          hint="Each video's own frame rate is read from its file. This is used only when it can't be."
+        >
           <Input
             id="fps"
             list="fps-presets"

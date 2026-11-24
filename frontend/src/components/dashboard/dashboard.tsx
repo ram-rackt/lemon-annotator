@@ -6,6 +6,7 @@ import Link from "next/link";
 import { AppHeader } from "@/components/app-header";
 import { CreateProjectDialog } from "@/components/dashboard/create-project-dialog";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
+import { ShotTypeSummary } from "@/components/dashboard/shot-type-summary";
 import { ErrorState } from "@/components/error-state";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,8 @@ export function Dashboard() {
             ))}
           </div>
         )}
+
+        <ShotTypeSummary />
       </main>
     </div>
   );

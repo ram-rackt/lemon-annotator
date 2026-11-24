@@ -65,7 +65,7 @@ Nothing is required for local use: AWS credentials are entered per project in th
 | Backend | `LEMON_SUPABASE_URL` | empty | Supabase project URL. Set: every request needs a signed-in user |
 | Backend | `LEMON_SUPABASE_JWT_SECRET` | empty | Only for older Supabase projects that still sign with the legacy JWT secret |
 | Backend | `LEMON_ALLOWED_EMAILS` | empty | Optional: only these emails may use the app (comma-separated) |
-| Backend | `LEMON_TEAMS` | empty | Shared workspaces, e.g. `rackt: ram@rackt.in, ankana@rackt.in` (see [Workspaces](#workspaces-and-coaches)) |
+| Backend | `LEMON_TEAMS` | empty | Shared workspaces, e.g. `rackt: ram@example.com, ankana@example.com` (see [Workspaces](#workspaces-and-coaches)) |
 | Backend | `LEMON_COACHES` | empty | Coaches' emails (comma-separated): they review flagged videos from every workspace |
 | Backend | `LEMON_CORS_ORIGINS` | `http://localhost:3000,...` | Sites allowed to call the API from a browser (your Vercel URL when hosted) |
 | Backend | `LEMON_DATA_DIR` | `./app_data` | Where data is stored without a database |
@@ -129,8 +129,8 @@ Each account works in a **workspace**: its own projects, folders, queue and prog
 - **Private (the default):** anyone not listed in `LEMON_TEAMS` gets a workspace of their own. Their projects are
   theirs alone, and stay there across sign-ins.
 - **Shared:** people listed together in `LEMON_TEAMS` on Render share one workspace and its dashboard, e.g.
-  `rackt: ram@rackt.in, ankana@rackt.in`. Separate several teams with `;`, e.g.
-  `rackt: ram@rackt.in, ankana@rackt.in; north: a@x.com, b@x.com`. Emails are matched ignoring case, and each email
+  `rackt: ram@example.com, ankana@example.com`. Separate several teams with `;`, e.g.
+  `rackt: ram@example.com, ankana@example.com; north: a@x.com, b@x.com`. Emails are matched ignoring case, and each email
   may be in one team only.
 - **Coaches:** emails in `LEMON_COACHES` (comma-separated) see the videos flagged for review in **every** workspace,
   under **Coach review**. Opening one shows only that project's flagged videos: no other videos, settings, export or
@@ -226,8 +226,8 @@ Give the label schema a whole-video field that flags a video for review: a choic
 `yes` / `no`), or a checkbox. A field with "review" in its name, such as **Flagged for Review**, is used automatically;
 pick another under **Settings > General > Coach review field**.
 
-Videos set to `true` appear in the **Coach review** tab on the dashboard, grouped by project (and in each project's own
-Coach review tab). They stay in the queue too. Each is listed, most recently saved first, with just its name, folder,
+Videos set to `true` appear in the **Coach review** tab on the dashboard, grouped by project (a project's own
+Coach review tab opens the same page). They stay in the queue too. Each is listed, most recently saved first, with just its name, folder,
 length and when it was last updated. The coach opens one, makes any changes and presses **Done reviewing**, which sets the
 flag to `false`, saves, and opens the next flagged video. **Done** on the list does the same without opening it. The
 list refreshes every 15 seconds while it is open.

@@ -49,6 +49,7 @@ import {
   useProject,
   useSaveAnnotation,
   useStreamUrl,
+  useFrameRate,
   useVideos,
 } from "@/hooks/queries";
 import { api, ApiError, errorMessage, isConflict } from "@/lib/api";
@@ -81,6 +82,7 @@ import type {
   Project,
   StreamUrl,
   VideoAnnotation,
+  VideoFrameRate,
   VideoItem,
   VideoList,
   VideoRef,
@@ -371,7 +373,7 @@ function Workspace({
   const router = useRouter();
   const projectId = project.id;
   const schema = project.label_schema;
-  const { fps, skip_seconds: skipSeconds } = project.settings;
+  const { skip_seconds: skipSeconds } = project.settings;
   const videos = list.videos;
 
   const playerRef = useRef<PlayerHandle>(null);
@@ -387,6 +389,10 @@ function Workspace({
   }, [activeKey]);
 
   const urlQ = useStreamUrl(projectId, activeKey);
+  // The video's own frame rate (read from its file), for frame numbers, frame stepping and box frames.
+  // Until it arrives, or when it can't be read, the project's FPS setting.
+  const rateQ = useFrameRate(projectId, activeKey);
+  const fps = rateQ.data?.key === activeKey ? rateQ.data.fps : project.settings.fps;
   const annQ = useAnnotation(projectId, activeKey);
   const saveMut = useSaveAnnotation(projectId);
   const activityQ = useActivity(projectId, activeKey);
@@ -611,6 +617,8 @@ function Workspace({
           streaming_url: url?.url ?? null,
           streaming_url_expires_at: url?.expires_at ?? null,
           duration_seconds: playerRef.current?.getDuration() || null,
+          // Frames are numbered at this video's own rate once it's known (else the project's setting).
+          fps: qc.getQueryData<VideoFrameRate>(keys.frameRate(projectId, key))?.fps,
           base_revision: base?.revision ?? null,
         },
       });

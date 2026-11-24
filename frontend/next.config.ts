@@ -16,7 +16,11 @@ const nextConfig: NextConfig = {
   },
   async redirects() {
     // The project list is the home page; only single projects live under /projects/<id>.
-    return [{ source: "/projects", destination: "/", permanent: false }];
+    return [
+      { source: "/projects", destination: "/", permanent: false },
+      // Coach review is one page for every project (links to the old per-project page still work).
+      { source: "/projects/:projectId/review", destination: "/review", permanent: false },
+    ];
   },
   async rewrites() {
     return apiIsRemote ? [] : [{ source: "/api/:path*", destination: `${backendUrl}/api/:path*` }];

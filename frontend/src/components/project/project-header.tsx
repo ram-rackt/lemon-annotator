@@ -26,7 +26,8 @@ export function ProjectHeader() {
   const tabs = [
     { href: `/projects/${projectId}`, label: coachView ? "Review" : "Annotate", icon: Clapperboard },
     {
-      href: `/projects/${projectId}/review`,
+      // The one Coach review page (every project's flagged videos); the count is this project's.
+      href: "/review",
       label: "Coach review",
       icon: Flag,
       count: reviewEnabled ? reviewCount : undefined,

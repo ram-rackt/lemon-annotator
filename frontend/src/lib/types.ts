@@ -178,6 +178,27 @@ export interface StreamUrl {
   expires_at: string;
 }
 
+/** Completed videos per shot type across the workspace (home page). `available`: offered to this user
+ * (team workspaces for now). */
+export interface ShotTypeStats {
+  available: boolean;
+  completed: number;
+  without_shot_type: number;
+  shot_types: {
+    shot_type: string;
+    label: string;
+    count: number;
+    projects: { project_id: string; project_name: string; count: number }[];
+  }[];
+}
+
+/** A video's frame rate: read from the file (`detected`), or else the project's FPS setting. */
+export interface VideoFrameRate {
+  key: string;
+  fps: number;
+  detected: boolean;
+}
+
 /** A rectangle on the frame, in fractions of its width and height (0–1, from the top-left corner). */
 export interface BoundingBox {
   x: number;
@@ -226,6 +247,8 @@ export interface AnnotationSave {
   streaming_url?: string | null;
   streaming_url_expires_at?: string | null;
   duration_seconds?: number | null;
+  /** The frame rate frames are numbered with (the video's own when it could be read). */
+  fps?: number;
   /** Revision these edits are based on; null means "nothing was saved for this video". */
   base_revision: string | null;
 }

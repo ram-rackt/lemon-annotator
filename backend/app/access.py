@@ -27,10 +27,11 @@ COACH_ENDPOINTS = {
     "review_videos",
     "finish_review",
     "stream_url",
+    "frame_rate",
     "get_annotation",
     "save_annotation",
 }
-FLAGGED_ONLY = {"stream_url", "get_annotation", "save_annotation"}
+FLAGGED_ONLY = {"stream_url", "frame_rate", "get_annotation", "save_annotation"}
 
 
 def is_member(user: User, project: Project) -> bool:

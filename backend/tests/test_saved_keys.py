@@ -4,14 +4,14 @@ import pytest
 
 from conftest import BUCKET, STORAGE, app_client, bearer, create_project, make_token
 
-RAM = bearer(make_token("u-ram", "ram@rackt.in", "Ram"))
-ANKANA = bearer(make_token("u-ankana", "ankana@rackt.in", "Ankana"))
+RAM = bearer(make_token("u-ram", "ram@example.com", "Ram"))
+ANKANA = bearer(make_token("u-ankana", "ankana@example.com", "Ankana"))
 
 
 @pytest.fixture(params=["files", "database"])
 def team(request, tmp_path, monkeypatch):
     with app_client(tmp_path, monkeypatch, database=request.param == "database", auth=True,
-                    teams="rackt: ram@rackt.in, ankana@rackt.in") as c:
+                    teams="rackt: ram@example.com, ankana@example.com") as c:
         yield c
 
 

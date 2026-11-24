@@ -80,7 +80,7 @@ export function ReviewOverview() {
                 <span className="text-sm font-normal text-muted-foreground tabular-nums">{p.videos.length}</span>
               </h2>
               <Link
-                href={`/projects/${p.project_id}/review`}
+                href={`/projects/${p.project_id}`}
                 className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
               >
                 Open project <ArrowRight className="size-3.5" />

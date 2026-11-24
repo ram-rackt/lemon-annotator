@@ -6,7 +6,7 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query
 
-from .. import presence, s3_service
+from .. import presence, s3_service, video_info
 from ..access import is_member, project_access
 from ..auth import User, current_user
 from ..config import get_settings
@@ -34,6 +34,7 @@ from ..models import (
     VideoAnnotation,
     VideoBatch,
     VideoDetails,
+    VideoFrameRate,
     VideoItem,
     VideoList,
     VideoState,
@@ -244,6 +245,15 @@ def stream_url(
         s3_service.head_video(project.storage, key)
     url, expires_at = s3_service.presign(project.storage, key, project.settings.url_expiry_seconds)
     return StreamUrl(key=key, url=url, expires_at=expires_at)
+
+
+@router.get("/videos/frame-rate", response_model=VideoFrameRate)
+def frame_rate(key: str = Query(..., min_length=1), project: Project = Depends(project_access)):
+    """The video's own frame rate from its file header, for numbering frames; the project's FPS setting
+    when it can't be read. Asked for next to the stream URL, so playback never waits for it."""
+    require_video_key(project, key)
+    fps = video_info.frame_rate(project.storage, key)
+    return VideoFrameRate(key=key, fps=fps or project.settings.fps, detected=fps is not None)
 
 
 @router.get("/videos/details", response_model=VideoDetails)
@@ -591,7 +601,8 @@ def save_annotation(
             hint="Restore it under Settings > General to work on it again.",
         )
     schema = project.label_schema
-    fps = project.settings.fps
+    # The video's own rate (the client reads it from /videos/frame-rate), else the project's setting.
+    fps = body.fps or project.settings.fps
     event_fields = [f for f in schema.fields if f.scope == "event"]
     video_fields = [f for f in schema.fields if f.scope == "video"]
     checkbox_fields = [f for f in event_fields if f.type == "checkbox"]
@@ -622,9 +633,6 @@ def save_annotation(
         # by not sending base_revision).
         if "base_revision" in body.model_fields_set and body.base_revision != current_revision:
             raise annotation_conflict(existing, cleared=existing is None)
-        # Frames saved under a different FPS setting are recomputed from their timestamps.
-        refresh_frames = bool(existing and existing.fps and existing.fps != fps)
-
         events = []
         for ev in sorted(body.events, key=lambda e: (e.timestamp, e.id)):
             # Every checkbox is written explicitly as true/false, even if never touched. Values for
@@ -637,7 +645,8 @@ def save_annotation(
                 **ev.attributes,
                 **{f.key: normalize_value(f, ev.attributes.get(f.key, f.default or None)) for f in other_fields},
             }
-            frame = ev.frame if ev.frame is not None and not refresh_frames else frame_at(ev.timestamp, fps)
+            # Always numbered from the timestamp, so every frame in the file uses the same (saved) rate.
+            frame = frame_at(ev.timestamp, fps)
             events.append(
                 ev.model_copy(
                     update={

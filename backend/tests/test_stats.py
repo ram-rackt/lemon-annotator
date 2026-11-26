@@ -50,7 +50,7 @@ def test_counts_completed_videos_per_shot_type(any_client):
     assert "Forehand Straight Clear" not in labels
 
 
-def test_team_members_and_coaches_see_it(tmp_path, monkeypatch):
+def test_who_sees_what(tmp_path, monkeypatch):
     with app_client(tmp_path, monkeypatch, auth=True, teams="rackt: ram@example.com",
                     coaches="coach@example.com") as client:
         team = _project(client, headers=RAM)
@@ -58,10 +58,15 @@ def test_team_members_and_coaches_see_it(tmp_path, monkeypatch):
         _save(client, team, "clips/rally_001.mp4", headers=RAM, shot_type="backhand_cross_clear")
         _save(client, own, "clips/rally_001.mp4", headers=PAT, shot_type="Forehand Smash")
 
-        # The team's projects only: never someone's private workspace.
-        for who in (RAM, COACH):
-            data = client.get("/api/stats/shot-types", headers=who).json()
-            assert data["available"] and [s["label"] for s in data["shot_types"]] == ["Backhand Cross Clear"]
-        assert client.get("/api/stats/shot-types", headers=PAT).json() == {
-            "available": False, "completed": 0, "without_shot_type": 0, "shot_types": []}
+        # Shot types: team members only, counting the team's projects (never someone's private workspace).
+        data = client.get("/api/stats/shot-types", headers=RAM).json()
+        assert data["available"] and [s["label"] for s in data["shot_types"]] == ["Backhand Cross Clear"]
+        for who in (COACH, PAT):
+            assert client.get("/api/stats/shot-types", headers=who).json() == {
+                "available": False, "completed": 0, "without_shot_type": 0, "shot_types": []}
+
+        # The Progress tab: team members and coaches.
+        progress = {who: client.get("/api/stats/progress", headers=h).json()["available"]
+                    for who, h in (("ram", RAM), ("coach", COACH), ("pat", PAT))}
+        assert progress == {"ram": True, "coach": True, "pat": False}
         assert client.get("/api/stats/shot-types").status_code == 401

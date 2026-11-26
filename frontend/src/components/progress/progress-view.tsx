@@ -6,7 +6,7 @@ import { AppHeader } from "@/components/app-header";
 import { DashboardNav } from "@/components/dashboard/dashboard-nav";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useShotTypeStats } from "@/hooks/queries";
+import { useProgressAccess } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
 
 // TEST DATA: hard-coded copies of the project cards' numbers, to try the page out. Replace with real
@@ -21,11 +21,11 @@ const FOLDERS = [
 ];
 
 /** The Progress tab: how many videos are done in total and in each folder. For the team and coaches (the
- * same people the server offers the team's numbers to). */
+ * server says who: /api/stats/progress). */
 export function ProgressView() {
   const hydrated = useHydrated();
-  const statsQ = useShotTypeStats();
-  const available = hydrated ? statsQ.data?.available : undefined;
+  const accessQ = useProgressAccess();
+  const available = hydrated ? accessQ.data?.available : undefined;
 
   return (
     <div className="flex min-h-svh flex-col">

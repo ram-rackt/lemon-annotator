@@ -11,7 +11,7 @@ from ..auth import User, current_user
 from ..config import get_settings
 from ..deps import Store, get_store
 from ..errors import AppError
-from ..models import ProjectCount, ShotTypeCount, ShotTypeStats
+from ..models import ProgressAccess, ProjectCount, ShotTypeCount, ShotTypeStats
 from .videos import belongs_to
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
@@ -30,20 +30,25 @@ def shot_type_label(value: str) -> str:
     return " ".join(word.capitalize() for word in re.split(r"[\s_-]+", value) if word)
 
 
+def in_team(user: User) -> bool:
+    """A member of a shared team workspace (everyone counts locally, without sign-in)."""
+    return not get_settings().auth_enabled or (user.workspace or "").startswith("team:")
+
+
+@router.get("/progress", response_model=ProgressAccess)
+def progress(user: User = Depends(current_user)):
+    """Whether the Progress tab is offered to this user: team members and coaches. (Its numbers are still
+    test data in the website for now.)"""
+    return ProgressAccess(available=in_team(user) or user.coach)
+
+
 @router.get("/shot-types", response_model=ShotTypeStats)
 def shot_types(user: User = Depends(current_user), store: Store = Depends(get_store)):
     """How many completed videos there are of each shot type, from the stored annotations (never S3): the
     same videos the queues count (current bucket and folder, deleted videos left out)."""
-    # Offered to team members (their team's projects) and coaches (every team's projects); private
-    # workspaces aren't counted or shown for now.
-    in_team = (user.workspace or "").startswith("team:")
-    if get_settings().auth_enabled and not (in_team or user.coach):
+    # Only for team members, counting their team's projects (not coaches or private workspaces, for now).
+    if not in_team(user):
         return ShotTypeStats(available=False)
-
-    def counted(project) -> bool:
-        if in_team or not get_settings().auth_enabled:
-            return is_member(user, project)
-        return (project.workspace or "").startswith("team:")  # a coach outside the teams
 
     completed = without = 0
     counts: dict[str, Counter[str]] = defaultdict(Counter)  # shot type -> project id -> videos
@@ -51,7 +56,7 @@ def shot_types(user: User = Depends(current_user), store: Store = Depends(get_st
     names: dict[str, str] = {}
     for project in store.list_projects():
         field = project.label_schema.shot_type_field()
-        if not field or not counted(project):
+        if not field or not is_member(user, project):
             continue
         try:
             stored, _ = store.iter_annotations(project.id)

@@ -152,6 +152,7 @@ export const api = {
   syncStorage: (id: string) => request<VideoList>(`/api/projects/${id}/sync`, { method: "POST" }),
   streamUrl: (id: string, key: string) => request<StreamUrl>(`/api/projects/${id}/videos/stream-url?${q(key)}`),
   shotTypeStats: () => request<ShotTypeStats>("/api/stats/shot-types"),
+  progressAccess: () => request<{ available: boolean }>("/api/stats/progress"),
   frameRate: (id: string, key: string) => request<VideoFrameRate>(`/api/projects/${id}/videos/frame-rate?${q(key)}`),
   videoDetails: (id: string, key: string) => request<VideoDetails>(`/api/projects/${id}/videos/details?${q(key)}`),
   /** `revision`: the saved version the user saw (null: nothing saved; undefined: unknown, no check). */

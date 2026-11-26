@@ -4,7 +4,7 @@ import { BookOpen, ChartColumn, Flag, FolderKanban } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { useReviewAll, useShotTypeStats } from "@/hooks/queries";
+import { useProgressAccess, useReviewAll } from "@/hooks/queries";
 import { useHydrated } from "@/hooks/use-hydrated";
 import { cn } from "@/lib/utils";
 
@@ -14,10 +14,10 @@ export function DashboardNav() {
   const hydrated = useHydrated();
   const reviewQ = useReviewAll();
   // Progress is for the team and coaches: the server says whether this user is one of them.
-  const statsQ = useShotTypeStats();
+  const progressQ = useProgressAccess();
   // Match the server HTML during hydration.
   const flagged = hydrated ? reviewQ.data?.reduce((n, p) => n + p.videos.length, 0) : undefined;
-  const showProgress = hydrated && Boolean(statsQ.data?.available);
+  const showProgress = hydrated && Boolean(progressQ.data?.available);
 
   const tabs = [
     { href: "/", label: "Projects", icon: FolderKanban, count: undefined },

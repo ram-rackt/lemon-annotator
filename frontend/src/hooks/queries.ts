@@ -33,6 +33,7 @@ export const keys = {
   /** The signed-in user's saved AWS keys. */
   savedKeys: ["saved-keys"] as const,
   shotTypeStats: ["stats", "shot-types"] as const,
+  progressAccess: ["stats", "progress"] as const,
 };
 
 /** A video's flag (or a project's review field) may have changed: refresh both review lists. */
@@ -48,6 +49,16 @@ export function useProjects() {
 /** Completed videos per shot type across the workspace (home page), read again each time it's shown. */
 export function useShotTypeStats() {
   return useQuery({ queryKey: keys.shotTypeStats, queryFn: api.shotTypeStats, enabled: useSignedIn(), staleTime: 0 });
+}
+
+/** Whether the Progress tab is offered to this user (team members and coaches). */
+export function useProgressAccess() {
+  return useQuery({
+    queryKey: keys.progressAccess,
+    queryFn: api.progressAccess,
+    enabled: useSignedIn(),
+    staleTime: 5 * 60_000,
+  });
 }
 
 export function useProject(id: string) {

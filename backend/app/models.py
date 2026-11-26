@@ -607,10 +607,15 @@ class ShotTypeCount(BaseModel):
     projects: list[ProjectCount]
 
 
+class ProgressAccess(BaseModel):
+    # True: the Progress tab is offered to this user (team members and coaches).
+    available: bool
+
+
 class ShotTypeStats(BaseModel):
     """Completed videos per shot type across the user's workspace, most annotated first."""
 
-    # False: not offered to this user (only team workspaces have it for now); everything else is empty.
+    # False: not offered to this user (only team members have it for now); everything else is empty.
     available: bool
     # Completed videos in projects with a shot type field, and how many of those have no shot type set.
     completed: int = 0
